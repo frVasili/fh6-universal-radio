@@ -21,6 +21,7 @@ public:
     void update_artwork_url(const std::string& url);
     
     // the DX12 hook will call this to see if there's a new image ready to be converted
+    bool has_pending_pixels() const noexcept { return has_new_image_.load(std::memory_order_acquire); }
     bool pop_pending_pixels(std::vector<uint8_t>& out_pixels, int& out_width, int& out_height);
 
     // lets the control loop know if currently building a new texture
@@ -48,7 +49,7 @@ private:
     std::vector<uint8_t> pending_pixels_;
     int width_ = 0;
     int height_ = 0;
-    bool has_new_image_ = false;
+    std::atomic<bool> has_new_image_{false};
     bool has_completed_artwork_ = false;
     std::string completed_url_;
     int completed_height_ = 0;

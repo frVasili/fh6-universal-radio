@@ -1,0 +1,1 @@
+PASS: preload does not change display; Load promotes cached title/art; stale preload ignored; restart keeps track

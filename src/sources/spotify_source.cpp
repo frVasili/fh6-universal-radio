@@ -1,3 +1,4 @@
+#include "fh6/spotify_metadata_sync.hpp"
 #include "fh6/net/http_get.hpp"
 #include "fh6/sources/spotify_source.hpp"
 #include "fh6/sources/external_media_session.hpp"
@@ -56,6 +57,7 @@ std::string unescape_debug(const std::string& s) {
 } // namespace
 
 struct SpotifySource::Pipe {
+    SpotifyMetadataSync metadata_sync;
     worker::WorkerClient* worker = nullptr;
     uint32_t pipeline_id = 0;
     
@@ -470,6 +472,7 @@ void SpotifySource::pump(RingBuffer& ring) {
 
                 if (is_trace_start &&
                     line.find("Received metadata: Track {") != std::string::npos) {
+                    p->metadata_sync.metadata_started();
                     p->meta_context = Pipe::MetaContext::Track;
                     p->next_meta_title.clear();
                     p->next_meta_artist.clear();
@@ -584,7 +587,7 @@ void SpotifySource::pump(RingBuffer& ring) {
 
                 // catch Preload events to ensure gapless tracks are queued, not applied instantly
                 if (line.find("command=Preload") != std::string::npos) {
-                    p->has_explicit_position = false;
+                    p->metadata_sync.preload(spotify_log_track_id(line));
                 }
 
                 // catch Load events for initial position sync (mid-song connect)
@@ -618,6 +621,16 @@ void SpotifySource::pump(RingBuffer& ring) {
                             p->has_explicit_position   = true;
                         } catch (...) {}
                     }
+                    const auto id = spotify_log_track_id(line);
+                    if (!id.empty()) {
+                        auto ready = p->metadata_sync.load(id);
+                        p->bytes_consumed = p->explicit_position_bytes;
+                        if (ready) {
+                            apply_info(ready->title, ready->artist, ready->album,
+                                       ready->duration_ms, ready->artwork_url);
+                            p->has_explicit_position = false;
+                        }
+                    }
                 }
 
                 // look for the track load event signature
@@ -648,50 +661,25 @@ void SpotifySource::pump(RingBuffer& ring) {
                         std::string final_cover = p->next_meta_cover_url;
 
                         
-                        // Skip if bytes_consumed has massively overshot (desync).
-                        // Otherwise, rely on p->has_explicit_position (set by command=Load)
-                        // to know if this is a manual skip/mid-song connect.
-                        const uint64_t track_bytes = p->track_duration_ms * kBytesPerMs;
-                        const uint64_t unplayed = ring.readable();
-                        const uint64_t played_bytes =
-                            p->bytes_consumed > unplayed ? (p->bytes_consumed - unplayed) : 0;
-                        const bool is_desync =
-                            p->track_duration_ms > 0 && played_bytes >= track_bytes;
-
-                        // First track, an explicit skip/connect, or a desync: apply at once.
-                        if (p->awaiting_first_track || p->force_next_metadata || p->has_explicit_position || is_desync) {
-                            apply_info(final_title, final_artist, final_album, parsed_duration,
-                                    final_cover);
-
+                        TrackInfo decoded;
+                        decoded.title = final_title;
+                        decoded.artist = final_artist;
+                        decoded.album = final_album;
+                        decoded.duration_ms = parsed_duration;
+                        decoded.artwork_url = final_cover;
+                        if (auto audible = p->metadata_sync.decoded(std::move(decoded))) {
+                            apply_info(audible->title, audible->artist, audible->album,
+                                       audible->duration_ms, audible->artwork_url);
                             if (p->has_explicit_position) {
-                                // sanity check to reject clock-drift desyncs
-                                uint64_t max_bytes = parsed_duration * kBytesPerMs;
-                                if (p->explicit_position_bytes > max_bytes) {
-                                    p->bytes_consumed = 0; 
-                                } else {
-                                    p->bytes_consumed = p->explicit_position_bytes;
-                                }
-                            } else {
-                                p->bytes_consumed =
-                                    is_desync && p->bytes_consumed >= track_bytes
-                                        ? p->bytes_consumed - track_bytes
-                                        : 0;
+                                const auto max_bytes = parsed_duration * kBytesPerMs;
+                                p->bytes_consumed = p->explicit_position_bytes <= max_bytes
+                                    ? p->explicit_position_bytes : 0;
+                                p->has_explicit_position = false;
                             }
-                            
-                            p->has_explicit_position = false;
-                            p->awaiting_first_track  = false;
-                            p->force_next_metadata   = false;
-                            p->stall_ticks           = 0;
-                        } else {
-                            // queue it for the gapless transition
-                            p->pending_title       = final_title;
-                            p->pending_artist      = final_artist;
-                            p->pending_album       = final_album;
-                            p->pending_duration_ms = parsed_duration;
-                            p->pending_cover_url   = final_cover;
-                            p->has_pending         = true;
-                            p->has_explicit_position = false; 
+                            p->awaiting_first_track = false;
+                            p->force_next_metadata = false;
                         }
+
                     }
                 }
             }
@@ -706,22 +694,6 @@ void SpotifySource::pump(RingBuffer& ring) {
     if (!PeekNamedPipe(p->read_pipe, nullptr, 0, nullptr, &avail, nullptr)) {
         p->ended = true;
         return;
-    }
-
-    // natural gapless transition
-    if (p->has_pending && p->track_duration_ms > 0) {
-        uint64_t track_bytes = p->track_duration_ms * kBytesPerMs;
-        uint64_t unplayed = ring.readable();
-        uint64_t played_bytes = p->bytes_consumed > unplayed ? (p->bytes_consumed - unplayed) : 0;
-
-        // trigger the metadata swap based on played_bytes
-        if (played_bytes >= track_bytes) {
-            apply_info(p->pending_title, p->pending_artist, p->pending_album,
-                    p->pending_duration_ms, p->pending_cover_url);
-            // carry the remainder so the timer stays exact
-            p->bytes_consumed -= track_bytes;
-            p->stall_ticks     = 0;
-        }
     }
 
     while (avail > 0) {

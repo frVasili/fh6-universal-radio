@@ -1,4 +1,4 @@
-# FH6 Universal Radio — personal fork 1.1.10-p1
+# FH6 Universal Radio — personal fork 1.1.10-p2
 
 Based on [g0ldyy/fh6-universal-radio](https://github.com/g0ldyy/fh6-universal-radio), GPLv3.
 Original credits and dashboard links are retained. This is a local fork, not an upstream release.
@@ -6,12 +6,16 @@ Original credits and dashboard links are retained. This is a local fork, not an 
 ## Changes
 
 - Album artwork uses the vendored CPU BC7 encoder on its background thread. It no longer launches texconv from the game's process or creates a separate GPU encoding workload.
-- Artwork uploads no longer wait for a GPU fence on the rendering thread. Upload buffers, allocators, command lists, and destination textures stay alive until their fence completes. Pending uploads are capped at four; a stalled GPU defers covers rather than blocking rendering. Initial texture discovery still uses upstream readback logic.
+- After a reported frame-pacing regression, p2 restores upstream GPU upload synchronization. The p1 asynchronous upload queue and per-submission mutex are removed. Normal render submissions now bypass artwork processing entirely when no cover or texture discovery is pending (two atomic checks, no artwork mutex/COM calls/resource scans). CPU conversion remains. A small GPU copy is still necessary to display each cover; initial texture discovery and cover uploads retain upstream synchronization.
 - Reuses the most recently completed cover when its URL and dimensions match, and cancels stale conversion work after skips. Image memory is released on early exits.
 - YouTube uses an explicitly selected managed QuickJS-NG runtime, logs extractor warnings, and has bounded network retries. This installation also updates yt-dlp. An empty playlist result from a live worker no longer triggers a duplicate in-game process spawn.
 - Jellyfin accepts raw UUIDs, complete web links, and `details?id=…&serverId=…` fragments, including existing saved stations. It uses the playlist items API and trims the server URL. Empty casts fail rather than pretending to play. Current-track restart is implemented.
 - New **smart** race-start mode: restart at 0–30 seconds inclusive; advance after 30 seconds. If a source cannot restart, keep the recent song instead of skipping it. Existing Next/Restart/Ignore/Off options remain.
 - Spotify restart performs a real seek instead of sending Previous. On Proton it uses the included loopback-only Python/MPRIS helper and targets the Spotify desktop app. It does not require account credentials. If Spotify is unavailable or cannot seek, playback is left alone.
+
+## p2 regression correction
+
+The first in-game p1 test was reported to stutter more frequently. The p2 render changes above reduce normal-frame overhead; their real game effect still needs an A/B test. Logs also confirmed Spotify preload metadata could display about 29 seconds early. p2 caches decoded title/artwork by track identity and promotes it only on the actual `command=Load` event, rather than on a duration estimate. Tests replay preload, actual load, an abandoned preload, and a restart. Decoder/audio-pipe latency can still produce a small subsecond offset.
 
 ## Installed configuration
 
@@ -62,5 +66,5 @@ If removing the helper permanently, remove `~/.config/systemd/user/fh6-radio-med
 - CPU artwork tests cover all four game texture sizes, non-multiple-of-four dimensions, and cancellation. Independent Pillow DDS decoding validates cover colors and transparency. Synthetic image encoding took approximately 0.5–3.5 ms on this computer; this is not a game frame-time measurement.
 - Linux helper tests check that restart calls SetPosition for Spotify, never Previous, and refuses unsupported/missing tracks. The installed service health and request guard were verified. Actual race-triggered Spotify behavior still needs an in-game check.
 - New dashboard smart-mode save test passes. The broader upstream suite has pre-existing failures: untouched upstream reports 11 failed / 12 passed tests; this fork reports the same 11 failed / 13 passed tests, with the new test passing. Failures include stale layout expectations and uninitialized translations.
-- In-game GPU behavior and frame pacing have not yet been measured. The two identified song-change stalls have been removed in code, but an actual driving test is still needed to confirm the perceived hitch is gone.
+- In-game GPU behavior and frame pacing have not yet been measured. p2 retains upstream GPU synchronization after p1 regressed frame pacing. It removes the external encoder and normal-frame artwork work; an actual driving test is still needed to confirm perceived stutter is improved.
 - YouTube login/age/region restrictions still apply. This does not bypass them, and a public-video test cannot guarantee every playlist works.

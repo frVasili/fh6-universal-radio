@@ -17,7 +17,7 @@ for name in ['yt-dlp.exe', 'qjs.exe']:
 shutil.copy2(root / 'scripts/linux-media-bridge.py', dist / 'fh6-radio/linux-media-bridge.py')
 shutil.copy2(root / 'LICENSE', dist / 'LICENSE')
 shutil.copy2(root / 'FORK.md', dist / 'FORK.md')
-(dist / 'fh6-radio/FORK-VERSION.txt').write_text('FH6 Universal Radio personal fork 1.1.10-p1\n')
+(dist / 'fh6-radio/FORK-VERSION.txt').write_text('FH6 Universal Radio personal fork 1.1.10-p2\n')
 manifest = ''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.relative_to(dist)}\n'
                    for p in sorted(dist.rglob('*')) if p.is_file() and p.name != 'SHA256SUMS')
 (dist / 'SHA256SUMS').write_text(manifest)
