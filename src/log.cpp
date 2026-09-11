@@ -25,6 +25,7 @@ void init(const std::filesystem::path& log_file) noexcept {
     std::scoped_lock lk{g_mu};
     if (g_file) std::fclose(g_file);
     g_file = _wfopen(log_file.c_str(), L"a");
+    if (g_file) std::setvbuf(g_file, nullptr, _IOFBF, 64 * 1024);
 }
 
 void shutdown() noexcept {
@@ -52,7 +53,10 @@ void emit(Level level, std::string_view message) noexcept {
     if (g_file) {
         std::fprintf(g_file, "%s %-5.*s %.*s\n", ts, (int)lvl.size(), lvl.data(),
                      (int)message.size(), message.data());
-        std::fflush(g_file);
+        // Informational diagnostics are buffered so a transition or render
+        // callback does not synchronously flush the log file. Warnings and
+        // errors remain durable promptly; shutdown() flushes the batch.
+        if (level == Level::warn || level == Level::error) std::fflush(g_file);
     }
 }
 

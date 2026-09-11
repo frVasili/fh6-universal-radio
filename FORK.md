@@ -1,9 +1,17 @@
-# FH6 Universal Radio — personal fork 1.1.10-p3
+# FH6 Universal Radio — personal fork 1.1.10-p4
 
 Based on [g0ldyy/fh6-universal-radio](https://github.com/g0ldyy/fh6-universal-radio), GPLv3.
 Original credits and dashboard links are retained. This is a local fork, not an upstream release.
 
-## p3 Spotify performance changes
+## p4 playback performance changes
+
+- Artwork preparation now uses one joinable worker with latest-request cancellation and a bounded encoded-payload cache. Cached covers can be republished after the game recreates its target texture without changing the displayed metadata.
+- Discovery cache expiry and heap rescans use elapsed time rather than call counts, so the 20 ms control loop cannot invalidate or rescan rapidly. Informational logs are buffered; warnings and errors still flush promptly.
+- The low-gain DSP path skips clipping arithmetic when the configured gain cannot reach the clipper knee. The existing smart race policy, Spotify metadata ownership, YouTube runtime, Jellyfin links, and helper service are preserved.
+
+The D3D12 queue/resource redesign and asynchronous transport queue remain deferred: the current tests do not validate FH6 texture ownership across queues or raw-source lifetime across source switches.
+
+## Earlier p3 graphics and Spotify changes
 
 - Normal frames retain p2's atomic early exit. No artwork queue lock, GPU fence polling, resource allocation, or worker wakeup is added to ordinary render submissions.
 - Cover-change GPU waits now run on one sleeping background worker, initialized before the graphics hooks. An atomic reservation permits only one upload at a time. Upload/command/allocator/texture resources are held until the GPU fence completes or the device is removed. A stuck GPU occupies one slot and later covers wait; in-flight resources are not freed on a timeout.
