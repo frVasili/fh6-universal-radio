@@ -1,0 +1,1 @@
+PASS: dispatch returns before GPU completes; resources stay alive; busy slot refuses new work; completion frees resources and slot

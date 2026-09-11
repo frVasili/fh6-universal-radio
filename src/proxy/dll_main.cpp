@@ -14,6 +14,8 @@
 #include <chrono>
 #include <wrl/client.h>
 #include "fh6/fmod/texture_injector.hpp"
+#include "fh6/single_flight_worker.hpp"
+#include "fh6/gpu_upload_completion.hpp"
 
 #include "kiero.h"
 #include "MinHook.h"
@@ -37,6 +39,11 @@ std::mutex g_TextureMutex;
 std::atomic<bool> g_HasUnverifiedTextures{false};
 std::vector<TrackedTexture> g_UnverifiedResources;
 std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> g_StreamerModeResources;
+
+// Process-lifetime worker, created before hooks are installed, never on a
+// render submission. Hooks themselves also live until process termination.
+fh6::SingleFlightWorker* g_ArtworkCompletion = nullptr;
+using fh6::ArtworkUploadResources;
 
 // hashes the packed pixel blocks, ignoring uninitialized GPU padding bytes in the buffer
 uint64_t CalculateFNV1aPitched(const uint8_t* data, UINT blocksX, UINT blocksY, UINT alignedRowPitch) {
@@ -169,13 +176,13 @@ __declspec(noinline) bool SafeExecuteFingerprint(
 }
 
 __declspec(noinline) bool SafeExecuteInjection(
-    ID3D12Device* pDevice,
+    ID3D12Fence* pFence,
     ID3D12CommandQueue* pQueue,
     ID3D12GraphicsCommandList* pCmdList,
     const D3D12_TEXTURE_COPY_LOCATION* pSrcLoc,
     int* pModifications,
     ID3D12Resource** pResources,
-    size_t numResources)
+    size_t numResources, bool* submitted)
 {
     __try {
         for (size_t i = 0; i < numResources; i++) {
@@ -219,29 +226,11 @@ __declspec(noinline) bool SafeExecuteInjection(
             (*pModifications)++;
         }
 
-        pCmdList->Close();
-
-        ID3D12CommandList* ppMyCommandLists[] = { pCmdList };
-        OriginalExecuteCommandLists(pQueue, 1, ppMyCommandLists);
-
-        ID3D12Fence* pFence = nullptr;
-        if (SUCCEEDED(pDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void**)&pFence))) {
-            HANDLE event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-            if (!event) {
-                pFence->Release();
-                return false;
-            }
-            HRESULT signalHr = pQueue->Signal(pFence, 1);
-            HRESULT eventHr = SUCCEEDED(signalHr) ? pFence->SetEventOnCompletion(1, event) : signalHr;
-            DWORD waitResult = SUCCEEDED(eventHr) ? WaitForSingleObject(event, 5000) : WAIT_FAILED;
-            CloseHandle(event);
-            if (FAILED(signalHr) || FAILED(eventHr) || waitResult != WAIT_OBJECT_0) {
-                pFence->Release();
-                return false;
-            }
-            pFence->Release();
-        }
-        return true;
+        if (FAILED(pCmdList->Close())) return false;
+        ID3D12CommandList* lists[] = { pCmdList };
+        *submitted = true; // retain resources even if the driver throws here
+        OriginalExecuteCommandLists(pQueue, 1, lists);
+        return SUCCEEDED(pQueue->Signal(pFence, 1));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
@@ -317,7 +306,8 @@ void __stdcall HookedExecuteCommandLists(ID3D12CommandQueue* pQueue, UINT NumCom
     // Ordinary submissions must bypass all artwork locks, COM calls, resource
     // scans and allocations. A cover changes only once every few minutes.
     if (!g_HasUnverifiedTextures.load(std::memory_order_acquire) &&
-        !fh6::TextureInjector::instance().has_pending_pixels()) {
+        (!fh6::TextureInjector::instance().has_pending_pixels() ||
+         (g_ArtworkCompletion && g_ArtworkCompletion->busy()))) {
         OriginalExecuteCommandLists(pQueue, NumCommandLists, ppCommandLists);
         return;
     }
@@ -390,15 +380,21 @@ void __stdcall HookedExecuteCommandLists(ID3D12CommandQueue* pQueue, UINT NumCom
         // INJECTION
         // ==========================================================================
         std::vector<ID3D12Resource*> streamer_copy;
+        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> held_targets;
         {
             std::lock_guard<std::mutex> lock(g_TextureMutex);
-            streamer_copy.reserve(g_StreamerModeResources.size());
-            for (const auto& res : g_StreamerModeResources) {
+            held_targets = g_StreamerModeResources;
+            streamer_copy.reserve(held_targets.size());
+            for (const auto& res : held_targets) {
                 streamer_copy.push_back(res.Get());
             }
         }
 
-        if (!streamer_copy.empty()) {
+        if (!streamer_copy.empty() && g_ArtworkCompletion && g_ArtworkCompletion->try_reserve()) {
+            struct ReservationGuard {
+                bool dispatched = false;
+                ~ReservationGuard() { if (!dispatched) g_ArtworkCompletion->release(); }
+            } reservation;
             std::vector<uint8_t> new_pixels;
             int w, h;
             
@@ -444,6 +440,11 @@ void __stdcall HookedExecuteCommandLists(ID3D12CommandQueue* pQueue, UINT NumCom
                             memcpy(pMapped + (y * alignedRowPitch), new_pixels.data() + (y * tightRowPitch), tightRowPitch);
                         }
                         pUploadResource->Unmap(0, nullptr);
+                    } else {
+                        pUploadResource->Release();
+                        pDevice->Release();
+                        OriginalExecuteCommandLists(pQueue, NumCommandLists, ppCommandLists);
+                        return;
                     }
 
                     ID3D12CommandAllocator* pAllocator = nullptr;
@@ -472,16 +473,35 @@ void __stdcall HookedExecuteCommandLists(ID3D12CommandQueue* pQueue, UINT NumCom
 
                     int modifications = 0;
 
-                    // pass the vector data into the SEH wrapper
-                    if (!SafeExecuteInjection(pDevice, pQueue, pCmdList, &srcLoc, &modifications, streamer_copy.data(), streamer_copy.size())) {
-                        fh6::log::warn("[dx12] intercepted crash during injection loop - texture was likely destroyed by the engine");
+                    auto resources = std::make_shared<ArtworkUploadResources>();
+                    resources->upload.Attach(pUploadResource);
+                    resources->allocator.Attach(pAllocator);
+                    resources->commands.Attach(pCmdList);
+                    resources->device = pDevice;
+                    resources->targets = std::move(held_targets);
+                    resources->event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+                    if (!resources->event || FAILED(pDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+                            __uuidof(ID3D12Fence), (void**)resources->fence.GetAddressOf()))) {
+                        pDevice->Release();
+                        OriginalExecuteCommandLists(pQueue, NumCommandLists, ppCommandLists);
+                        return;
+                    }
+                    // Construct the closure before submission so allocation cannot
+                    // fail after the GPU starts using these resources.
+                    std::function<void()> completion = [resources] {
+                        resources->wait_for_completion();
+                    };
+                    bool submitted = false;
+                    if (!SafeExecuteInjection(resources->fence.Get(), pQueue, pCmdList, &srcLoc,
+                            &modifications, streamer_copy.data(), streamer_copy.size(), &submitted)) {
+                        fh6::log::warn("[dx12] artwork submission failed");
+                    }
+                    if (submitted) {
+                        g_ArtworkCompletion->dispatch(std::move(completion));
+                        reservation.dispatched = true;
                     }
 
-                    pUploadResource->Release();
-                    pCmdList->Release();
-                    pAllocator->Release();
-
-                    fh6::log::info("[dx12] BC7 mass overwrite complete on {} live resources", modifications);
+                    fh6::log::info("[dx12] BC7 upload submitted for {} resources (background completion)", modifications);
                 }
             }
         }
@@ -497,10 +517,12 @@ void __stdcall HookedExecuteCommandLists(ID3D12CommandQueue* pQueue, UINT NumCom
 // ==============================================================================
 
 extern "C" __declspec(dllexport) void InitializeDX12Hook() {
-    std::thread(InitDX12HookThread).detach();
+    static std::once_flag initialized;
+    std::call_once(initialized, [] { std::thread(InitDX12HookThread).detach(); });
 }
 
 void InitDX12HookThread() {
+    g_ArtworkCompletion = new fh6::SingleFlightWorker;
     for (int i = 0; i < 500; ++i) {
         if (kiero::init(kiero::RenderType::D3D12) == kiero::Status::Success) {
             auto srvStatus = kiero::bind(18, (void**)&OriginalCreateSRV, (void*)HookedCreateSRV);

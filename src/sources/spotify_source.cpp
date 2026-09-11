@@ -446,9 +446,10 @@ void SpotifySource::pump(RingBuffer& ring) {
 
             // process all complete lines
             size_t pos;
-            while ((pos = p->err_buf.find('\n')) != std::string::npos) {
-                std::string line = p->err_buf.substr(0, pos);
-                p->err_buf.erase(0, pos + 1);
+            size_t consumed = 0;
+            while ((pos = p->err_buf.find('\n', consumed)) != std::string::npos) {
+                std::string line = p->err_buf.substr(consumed, pos - consumed);
+                consumed = pos + 1;
 
                 // strip Windows carriage return if it exists
                 if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -463,7 +464,11 @@ void SpotifySource::pump(RingBuffer& ring) {
                 bool is_trace_start = line.find("TRACE librespot_metadata") != std::string::npos;
                 bool is_trace_block = is_trace_start || p->meta_context != Pipe::MetaContext::None;
 
-                if (!is_trace_block && p->log_file && p->log_file != INVALID_HANDLE_VALUE) {
+                // Raw debug chatter need not perform synchronous disk writes on
+                // the audio/control loop. Keep actionable warnings and errors.
+                if (!is_trace_block &&
+                    (line.find(" WARN ") != std::string::npos || line.find(" ERROR ") != std::string::npos) &&
+                    p->log_file && p->log_file != INVALID_HANDLE_VALUE) {
                     std::string out_line = line + "\r\n";
                     DWORD w              = 0;
                     WriteFile(p->log_file, out_line.data(), static_cast<DWORD>(out_line.size()), &w,
@@ -683,6 +688,7 @@ void SpotifySource::pump(RingBuffer& ring) {
                     }
                 }
             }
+            p->err_buf.erase(0, consumed);
         }
     }
 

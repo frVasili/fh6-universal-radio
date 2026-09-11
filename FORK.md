@@ -1,9 +1,18 @@
-# FH6 Universal Radio — personal fork 1.1.10-p2
+# FH6 Universal Radio — personal fork 1.1.10-p3
 
 Based on [g0ldyy/fh6-universal-radio](https://github.com/g0ldyy/fh6-universal-radio), GPLv3.
 Original credits and dashboard links are retained. This is a local fork, not an upstream release.
 
-## Changes
+## p3 Spotify performance changes
+
+- Normal frames retain p2's atomic early exit. No artwork queue lock, GPU fence polling, resource allocation, or worker wakeup is added to ordinary render submissions.
+- Cover-change GPU waits now run on one sleeping background worker, initialized before the graphics hooks. An atomic reservation permits only one upload at a time. Upload/command/allocator/texture resources are held until the GPU fence completes or the device is removed. A stuck GPU occupies one slot and later covers wait; in-flight resources are not freed on a timeout.
+- This replaces p1's per-render-submission mutex/polling design and p2's synchronous cover-upload wait. A GPU copy is still needed to display art; submission and resource creation can still have a small cost.
+- Spotify metadata parsing consumes each log chunk in one pass rather than repeatedly moving the remaining text for each line. Raw debug chatter no longer causes disk writes on the audio loop; warnings and errors remain.
+- A headless real-D3D12 test under Wine deliberately held the GPU copy behind a fence. Background dispatch returned in approximately 0.001 ms while resources remained alive, then readback matched after completion. This tests lifetime and synchronization, not game frame times. The portable worker test also checks reservation and resource release. Spotify preload/actual-load tests continue to pass.
+- Reference: [Microsoft fence-based resource management](https://learn.microsoft.com/en-us/windows/win32/direct3d12/fence-based-resource-management).
+
+## Earlier changes
 
 - Album artwork uses the vendored CPU BC7 encoder on its background thread. It no longer launches texconv from the game's process or creates a separate GPU encoding workload.
 - After a reported frame-pacing regression, p2 restores upstream GPU upload synchronization. The p1 asynchronous upload queue and per-submission mutex are removed. Normal render submissions now bypass artwork processing entirely when no cover or texture discovery is pending (two atomic checks, no artwork mutex/COM calls/resource scans). CPU conversion remains. A small GPU copy is still necessary to display each cover; initial texture discovery and cover uploads retain upstream synchronization.
@@ -66,5 +75,5 @@ If removing the helper permanently, remove `~/.config/systemd/user/fh6-radio-med
 - CPU artwork tests cover all four game texture sizes, non-multiple-of-four dimensions, and cancellation. Independent Pillow DDS decoding validates cover colors and transparency. Synthetic image encoding took approximately 0.5–3.5 ms on this computer; this is not a game frame-time measurement.
 - Linux helper tests check that restart calls SetPosition for Spotify, never Previous, and refuses unsupported/missing tracks. The installed service health and request guard were verified. Actual race-triggered Spotify behavior still needs an in-game check.
 - New dashboard smart-mode save test passes. The broader upstream suite has pre-existing failures: untouched upstream reports 11 failed / 12 passed tests; this fork reports the same 11 failed / 13 passed tests, with the new test passing. Failures include stale layout expectations and uninitialized translations.
-- In-game GPU behavior and frame pacing have not yet been measured. p2 retains upstream GPU synchronization after p1 regressed frame pacing. It removes the external encoder and normal-frame artwork work; an actual driving test is still needed to confirm perceived stutter is improved.
+- In-game GPU behavior and frame pacing have not yet been measured. p3 moves completion off the render thread while preserving the p2 idle bypass. An actual Spotify driving test is still needed to confirm perceived stutter is improved.
 - YouTube login/age/region restrictions still apply. This does not bypass them, and a public-video test cannot guarantee every playlist works.

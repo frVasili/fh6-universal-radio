@@ -1,0 +1,1 @@
+PASS: real GPU copy, retained until fence, correct readback; completion dispatch 0.001 ms
