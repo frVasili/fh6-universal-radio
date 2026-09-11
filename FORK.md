@@ -1,17 +1,19 @@
-# FH6 Universal Radio — personal fork 1.1.10-p4-safe
+# FH6 Universal Radio — personal fork 1.1.10-p5-safe
 
-## p4-safe scheduling cleanup
+## p5-safe scheduling cleanup
 
 - Discovery invalidation and heap-scan retries are elapsed-time based, preventing rapid retries from the 20 ms control loop.
-- Informational logging is buffered; warnings and errors still flush promptly.
+- Logging is bounded and asynchronous; file I/O and timestamp formatting run on the logger thread, while warnings and errors still flush promptly.
 - At gain values at or below 0.85, the DSP uses direct S16 scaling because clipping cannot occur.
+- Artwork preparation uses one persistent worker, a four-entry/eight-megabyte encoded BC7 cache, latest-request replacement, cancellation checks, and target-texture generations. Cached covers are republished after texture recreation.
+- Race and hotkey transport commands run through a bounded ordered manager queue. Requests carry the source name and active generation, so a late command cannot operate on a replacement source. The source remains manager-owned while a command runs.
 
-The artwork worker/cache rewrite and all D3D12 queue changes are deliberately excluded after the p4 startup failure. Existing artwork, metadata, smart restart, YouTube, Jellyfin, controller, and Steam Input paths are unchanged.
+The unsafe D3D12 queue/resource redesign remains deferred: the hook still uses the validated existing graphics path, because the available headless test does not prove FH6 texture state or multi-queue ownership.
 
 Based on [g0ldyy/fh6-universal-radio](https://github.com/g0ldyy/fh6-universal-radio), GPLv3.
 Original credits and dashboard links are retained. This is a local fork, not an upstream release.
 
-## p3 Spotify performance changes
+## Earlier p3 Spotify and render changes
 
 - Normal frames retain p2's atomic early exit. No artwork queue lock, GPU fence polling, resource allocation, or worker wakeup is added to ordinary render submissions.
 - Cover-change GPU waits now run on one sleeping background worker, initialized before the graphics hooks. An atomic reservation permits only one upload at a time. Upload/command/allocator/texture resources are held until the GPU fence completes or the device is removed. A stuck GPU occupies one slot and later covers wait; in-flight resources are not freed on a timeout.
@@ -83,5 +85,5 @@ If removing the helper permanently, remove `~/.config/systemd/user/fh6-radio-med
 - CPU artwork tests cover all four game texture sizes, non-multiple-of-four dimensions, and cancellation. Independent Pillow DDS decoding validates cover colors and transparency. Synthetic image encoding took approximately 0.5–3.5 ms on this computer; this is not a game frame-time measurement.
 - Linux helper tests check that restart calls SetPosition for Spotify, never Previous, and refuses unsupported/missing tracks. The installed service health and request guard were verified. Actual race-triggered Spotify behavior still needs an in-game check.
 - New dashboard smart-mode save test passes. The broader upstream suite has pre-existing failures: untouched upstream reports 11 failed / 12 passed tests; this fork reports the same 11 failed / 13 passed tests, with the new test passing. Failures include stale layout expectations and uninitialized translations.
-- In-game GPU behavior and frame pacing have not yet been measured. p3 moves completion off the render thread while preserving the p2 idle bypass. An actual Spotify driving test is still needed to confirm perceived stutter is improved.
+- In-game GPU behavior and frame pacing have not yet been measured. The new p5-safe changes are unit/build verified but still require an actual Spotify driving comparison to confirm perceived stutter is improved.
 - YouTube login/age/region restrictions still apply. This does not bypass them, and a public-video test cannot guarantee every playlist works.

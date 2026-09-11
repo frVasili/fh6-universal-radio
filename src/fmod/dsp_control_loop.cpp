@@ -312,25 +312,29 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
         if (mode == "smart") {
             const auto track = active->current_track();
             if (restart_recent_track(track.position_ms)) {
-                fired = active->restart_current();
-                outcome = fired ? "restarted recent track" : "restart unavailable; kept recent track";
+                fired = bridge_.manager().enqueue_transport(active,
+                    AudioSourceManager::TransportCommand::restart);
+                outcome = fired ? "queued restart of recent track" : "restart queue busy; kept recent track";
             } else {
-                fired = active->skip_next();
-                outcome = fired ? "advanced to next track" : "could not advance queue";
+                fired = bridge_.manager().enqueue_transport(active,
+                    AudioSourceManager::TransportCommand::next);
+                outcome = fired ? "queued next track" : "transport queue busy; kept current track";
             }
         } else if (mode == "next") {
-            fired   = active->skip_next();
-            outcome = fired ? "advanced to next track" : "could not advance queue";
+            fired   = bridge_.manager().enqueue_transport(active,
+                AudioSourceManager::TransportCommand::next);
+            outcome = fired ? "queued next track" : "transport queue busy; kept current track";
         } else if (mode == "restart") {
-            fired   = active->restart_current();
-            outcome = fired ? "restarted current track" : "could not restart current track";
+            fired   = bridge_.manager().enqueue_transport(active,
+                AudioSourceManager::TransportCommand::restart);
+            outcome = fired ? "queued restart" : "transport queue busy; kept current track";
         } else if (mode == "off") {
             const auto st = active->playback_state();
             if (st == PlaybackState::playing || st == PlaybackState::buffering) {
-                active->stop();
-                fired               = true;
-                paused_by_race_off_ = true;
-                outcome             = "stopped playback";
+                fired               = bridge_.manager().enqueue_transport(active,
+                    AudioSourceManager::TransportCommand::stop);
+                paused_by_race_off_ = fired;
+                outcome             = fired ? "queued playback stop" : "transport queue busy; kept playback";
             } else {
                 outcome = "skipped stop (not playing)";
             }
@@ -346,9 +350,10 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
     // --- raceEndResume (race_active falling edge) ---
     const bool race_edge_out = !game.race_active && prev_race_;
     if (race_edge_out && paused_by_race_off_) {
-        active->play();
-        paused_by_race_off_ = false;
-        log::info("[ctrl] race ended -- resuming playback");
+        if (bridge_.manager().enqueue_transport(active, AudioSourceManager::TransportCommand::play)) {
+            paused_by_race_off_ = false;
+            log::info("[ctrl] race ended -- queued playback resume");
+        }
     }
     prev_race_         = game.race_active;
     prev_race_restart_ = game.race_restart;
@@ -527,10 +532,10 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
 
     // execute skip track
     if (trigger_skip && (now - last_skip_cmd_ >= kSkipCommandCooldown)) {
-        if (active->skip_next()) {
+        if (bridge_.manager().enqueue_transport(active, AudioSourceManager::TransportCommand::next)) {
             ring.drain();
             last_skip_cmd_ = now;
-            log::info("[ctrl] Hotkey triggered: advanced to next track");
+            log::info("[ctrl] Hotkey triggered: queued next track");
         }
     }
     
@@ -553,21 +558,22 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
     if (trigger_pp && (now - last_playpause_cmd_ >= 250ms)) {
         auto state = active->playback_state();
         if (state == PlaybackState::playing || state == PlaybackState::buffering) {
-            active->pause();
-            log::info("[ctrl] Hotkey triggered: paused playback");
+            if (bridge_.manager().enqueue_transport(active, AudioSourceManager::TransportCommand::pause))
+                log::info("[ctrl] Hotkey triggered: queued pause");
         } else {
-            active->play();
-            log::info("[ctrl] Hotkey triggered: resumed playback");
+            if (bridge_.manager().enqueue_transport(active, AudioSourceManager::TransportCommand::play))
+                log::info("[ctrl] Hotkey triggered: queued resume");
         }
         last_playpause_cmd_ = now;
     }
 
     // execute previous track
     if (trigger_prev && (now - last_prev_cmd_ >= kSkipCommandCooldown)) {
-        active->previous();
-        ring.drain();
-        last_prev_cmd_ = now;
-        log::info("[ctrl] Hotkey triggered: returned to previous track");
+        if (bridge_.manager().enqueue_transport(active, AudioSourceManager::TransportCommand::previous)) {
+            ring.drain();
+            last_prev_cmd_ = now;
+            log::info("[ctrl] Hotkey triggered: queued previous track");
+        }
     }
 
     // execute cycle station/playlist

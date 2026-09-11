@@ -1,9 +1,14 @@
 #include "fh6/audio_source_manager.hpp"
 #include "fh6/log.hpp"
 
+#include <utility>
+
 namespace fh6 {
 
-AudioSourceManager::AudioSourceManager(std::size_t ring_bytes) : ring_{ring_bytes} {}
+AudioSourceManager::AudioSourceManager(std::size_t ring_bytes)
+    : ring_{ring_bytes}, transport_thread_{[this](std::stop_token token) {
+          transport_loop(token);
+      }} {}
 
 void AudioSourceManager::register_source(std::unique_ptr<IAudioSource> src) {
     if (!src) return;
@@ -25,6 +30,7 @@ std::unique_ptr<IAudioSource> AudioSourceManager::unregister_source(std::string_
         removed->pause();
         ring_.drain();
         active_.store(nullptr, std::memory_order_release);
+        ++active_generation_;
     }
     log::info("[mgr] unregistered source '{}'", removed->name());
     return removed;
@@ -47,8 +53,59 @@ bool AudioSourceManager::switch_to(std::string_view name) {
     ring_.drain();
     next->play();
     active_.store(next, std::memory_order_release);
+    ++active_generation_;
     log::info("[mgr] active source = '{}'", next->name());
     return true;
+}
+
+bool AudioSourceManager::enqueue_active_transport(TransportCommand command) {
+    return enqueue_transport(nullptr, command);
+}
+
+bool AudioSourceManager::enqueue_transport(IAudioSource* expected, TransportCommand command) {
+    std::lock_guard swap_lock{swap_mutex_};
+    auto* current = active_.load(std::memory_order_acquire);
+    if (!current || (expected && current != expected)) return false;
+
+    TransportRequest request{std::string{current->name()}, active_generation_, command};
+    {
+        std::lock_guard queue_lock{transport_mutex_};
+        constexpr std::size_t kMaxQueuedTransport = 8;
+        if (transport_queue_.size() >= kMaxQueuedTransport) return false;
+        transport_queue_.push_back(std::move(request));
+    }
+    transport_cv_.notify_one();
+    return true;
+}
+
+void AudioSourceManager::transport_loop(std::stop_token token) {
+    for (;;) {
+        TransportRequest request;
+        {
+            std::unique_lock lock{transport_mutex_};
+            transport_cv_.wait(lock, token, [this] { return !transport_queue_.empty(); });
+            if (token.stop_requested()) return;
+            request = std::move(transport_queue_.front());
+            transport_queue_.pop_front();
+        }
+
+        // This lock keeps the source alive while its operation runs. The
+        // operation itself is deliberately off the 20 ms control-loop thread.
+        std::lock_guard swap_lock{swap_mutex_};
+        auto it = sources_.find(request.source_name);
+        if (it == sources_.end() || active_.load(std::memory_order_acquire) != it->second.get() ||
+            request.generation != active_generation_)
+            continue; // source switch made this request obsolete
+
+        switch (request.command) {
+            case TransportCommand::play: it->second->play(); break;
+            case TransportCommand::pause: it->second->pause(); break;
+            case TransportCommand::stop: it->second->stop(); break;
+            case TransportCommand::next: it->second->next(); break;
+            case TransportCommand::previous: it->second->previous(); break;
+            case TransportCommand::restart: it->second->restart_current(); break;
+        }
+    }
 }
 
 IAudioSource* AudioSourceManager::find(std::string_view name) const {
@@ -73,6 +130,10 @@ void AudioSourceManager::pump_once() {
 }
 
 void AudioSourceManager::shutdown() noexcept {
+    transport_thread_.request_stop();
+    transport_cv_.notify_one();
+    if (transport_thread_.joinable()) transport_thread_.join();
+
     std::scoped_lock lk{swap_mutex_};
     active_.store(nullptr, std::memory_order_release);
     for (auto& [_, s] : sources_) {
