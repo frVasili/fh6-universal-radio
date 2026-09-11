@@ -22,7 +22,7 @@ struct HotkeysConfig {
 };
 
 struct PlaybackConfig {
-    std::string race_start_playback = "next"; // "next" | "restart" | "ignore" | "off"
+    std::string race_start_playback = "smart"; // "smart" | "next" | "restart" | "ignore" | "off"
     bool volume_normalization       = false;
     bool equalizer_enabled          = false;
     std::array<float, 5> equalizer_bands{}; // 60 / 250 / 1000 / 4000 / 12000 Hz, [-6, +6] dB
@@ -69,6 +69,7 @@ struct YouTubeStation {
 struct YouTubeMusicConfig {
     bool enabled = false;
     std::filesystem::path cookies_path;
+    std::filesystem::path js_runtime_path; // resolved managed QuickJS-NG, not persisted
     std::filesystem::path yt_dlp_path; // empty = look up on PATH
     std::vector<YouTubeStation> stations;
     std::string active_station; // station name; empty/unknown => first station

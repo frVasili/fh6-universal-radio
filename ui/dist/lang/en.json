@@ -238,7 +238,7 @@
   "jellyfin.title": "Jellyfin",
   "jellyfin.description": "Enter a Jellyfin Playlist ID. The radio switches source and starts streaming immediately.",
   "jellyfin.playlist_id": "Playlist ID",
-  "jellyfin.playlist_placeholder": "Playlist ID…",
+  "jellyfin.playlist_placeholder": "Playlist ID or Jellyfin link…",
   "jellyfin.use_favorites": "Use Favorites (ignores Playlist ID)",
   "jellyfin.toggle_shuffle": "Toggle Shuffle",
   "jellyfin.default_station_name": "My Playlist",
@@ -303,6 +303,7 @@
 
   "schema.playback": "Playback",
   "schema.playback.race_start": "Race start",
+  "schema.playback.race_start.smart": "Restart within 30 seconds, otherwise next",
   "schema.playback.race_start.next": "Next",
   "schema.playback.race_start.restart": "Restart",
   "schema.playback.race_start.ignore": "Ignore",

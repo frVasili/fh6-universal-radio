@@ -8,3 +8,11 @@ include/stb
 
 # Dependency directories
 node_modules/
+
+/test-tools/
+/__pycache__/
+/.tools/
+/.test-prefix/
+/scripts/__pycache__/
+/tests/__pycache__/
+/pnpm-lock.yaml

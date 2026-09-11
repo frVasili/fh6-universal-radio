@@ -117,7 +117,7 @@ export const SCHEMA = () => [
         "playback",
         t("schema.playback"),
         [
-            ["race_start_playback", t("schema.playback.race_start"), "select", ["next", "restart", "ignore", "off"]],
+            ["race_start_playback", t("schema.playback.race_start"), "select", ["smart", "next", "restart", "ignore", "off"]],
             ["volume_normalization", t("schema.playback.normalize"), "checkbox"],
             ["equalizer_enabled", t("schema.playback.equalizer"), "checkbox"],
             ["equalizer_bands", t("schema.playback.eq_bands"), "bands"],

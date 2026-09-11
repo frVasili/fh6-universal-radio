@@ -29,8 +29,8 @@ constexpr std::array<ToolSpec, kToolCount> kSpecs{{
      L"https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe", ""},
     {"librespot", L"librespot.exe",
      L"https://github.com/g0ldyy/fh6-universal-radio/releases/download/deps/librespot.exe", ""},
-    {"texconv", L"texconv.exe",
-     L"https://github.com/microsoft/DirectXTex/releases/latest/download/texconv.exe", ""},
+    {"quickjs", L"qjs.exe",
+     L"https://github.com/quickjs-ng/quickjs/releases/download/v0.16.2/qjs-windows-x86_64.exe", "7b27412de844403545bd151fbe49191b4d5b91a9e15b5db7c863fea54639a82b"},
 }};
 
 const ToolSpec& spec(Tool t) { return kSpecs[static_cast<std::size_t>(t)]; }

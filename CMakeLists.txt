@@ -50,6 +50,7 @@ add_library(version SHARED
     src/config_store.cpp
     src/deps.cpp
     src/playback_dsp.cpp
+    src/artwork_codec.cpp
     src/ring_buffer.cpp
     src/subprocess.cpp
     src/net/http_get.cpp
@@ -83,6 +84,7 @@ target_include_directories(version PRIVATE
     third_party/nlohmann
     third_party/toml11
     third_party/miniaudio
+    vendor/bc7enc
     third_party/stb
     third_party/minhook/include
     third_party/kiero
@@ -111,6 +113,7 @@ target_sources(version PRIVATE
     third_party/minhook/src/hde/hde64.c
     third_party/minhook/src/hde/hde32.c
     third_party/kiero/kiero.cpp
+    vendor/bc7enc/bc7enc.cpp
     src/fmod/texture_injector.cpp
 )
 
@@ -125,3 +128,13 @@ set_target_properties(fh6-radio-worker PROPERTIES
     OUTPUT_NAME fh6-radio-worker
     PREFIX ""
 )
+
+option(FH6_BUILD_SMOKE_TEST "Build standalone media integration test" OFF)
+if(FH6_BUILD_SMOKE_TEST)
+    add_executable(media-smoke tests/media_smoke.cpp src/config.cpp src/log.cpp
+        src/ring_buffer.cpp src/playback_dsp.cpp src/subprocess.cpp
+        src/net/http_get.cpp src/worker/worker_client.cpp
+        src/sources/youtube_music_source.cpp src/sources/jellyfin_source.cpp)
+    target_include_directories(media-smoke PRIVATE include third_party/nlohmann third_party/toml11)
+    target_link_libraries(media-smoke PRIVATE winhttp bcrypt ws2_32)
+endif()

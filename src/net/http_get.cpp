@@ -13,7 +13,7 @@
 
 namespace fh6::net {
 
-std::optional<std::string> http_get(std::string_view url, std::string_view extra_header) {
+std::optional<std::string> http_get(std::string_view url, std::string_view extra_header, int timeout_ms) {
     std::string full_url = std::string(url);
     
     // trim trailing whitespace/newlines
@@ -67,7 +67,7 @@ std::optional<std::string> http_get(std::string_view url, std::string_view extra
         return std::nullopt;
     }
 
-    if (!WinHttpSetTimeouts(hSession, 5000, 10000, 10000, 15000)) {
+    if (!WinHttpSetTimeouts(hSession, std::min(5000, timeout_ms), std::min(10000, timeout_ms), std::min(10000, timeout_ms), timeout_ms)) {
         log::warn("[http] WinHttpSetTimeouts failed");
     }
 

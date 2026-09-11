@@ -62,3 +62,12 @@ describe("collectSettings", () => {
     expect(patch.playback.equalizer_bands).toEqual([3, 0, 0, 0, 0]);
   });
 });
+
+describe("smart race start", () => {
+  it("preserves the recent-track restart policy through settings save", () => {
+    renderSettings(form(), { playback: { race_start_playback: "smart" } });
+    const select = form().querySelector("#f-playback-race_start_playback");
+    expect(select.value).toBe("smart");
+    expect(collectSettings(form()).playback.race_start_playback).toBe("smart");
+  });
+});

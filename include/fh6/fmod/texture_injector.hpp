@@ -49,6 +49,9 @@ private:
     int width_ = 0;
     int height_ = 0;
     bool has_new_image_ = false;
+    bool has_completed_artwork_ = false;
+    std::string completed_url_;
+    int completed_height_ = 0;
 
     std::atomic<bool> is_processing_{false}; 
     std::atomic<uint64_t> latest_job_id_{0};

@@ -67,12 +67,12 @@ Config with_resolved_bins(Config c, const DependencyManager& deps) {
     c.general.ffmpeg_path       = deps.resolve(Tool::ffmpeg, c.general.ffmpeg_path);
     c.youtube_music.yt_dlp_path = deps.resolve(Tool::yt_dlp, c.youtube_music.yt_dlp_path);
     c.spotify.librespot_path    = deps.resolve(Tool::librespot, c.spotify.librespot_path);
-    std::string texconv_path    = deps.resolve(Tool::texconv, "").string();
+    c.youtube_music.js_runtime_path = deps.resolve(Tool::quickjs, "");
 
     log::info("[bridge] Resolved ffmpeg path to: {}", c.general.ffmpeg_path.string());
     log::info("[bridge] Resolved yt-dlp path to: {}", c.youtube_music.yt_dlp_path.string());
     log::info("[bridge] Resolved librespot path to: {}", c.spotify.librespot_path.string());
-    log::info("[bridge] Resolved texconv path to: {}", texconv_path);
+
     return c;
 }
 
@@ -129,7 +129,7 @@ void run_bridge(HMODULE self) noexcept {
     std::filesystem::create_directories(data_dir, ec);
 
     log::init(data_dir / "bridge.log");
-    log::info("[bridge] FH6 Universal Radio starting; data_dir={}", data_dir.string());
+    log::info("[bridge] FH6 Universal Radio personal fork 1.1.10-p1 starting; data_dir={}", data_dir.string());
 
     const auto ui_dir = data_dir / "ui";
     if (!verify_ui_credits(ui_dir)) {

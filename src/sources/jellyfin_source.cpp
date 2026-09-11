@@ -1,3 +1,4 @@
+#include "fh6/playback_policy.hpp"
 #include "fh6/sources/jellyfin_source.hpp"
 #include "fh6/log.hpp"
 #include "fh6/net/http_get.hpp"
@@ -58,20 +59,19 @@ std::optional<std::string> http_get(const JellyfinConfig& cfg, const std::string
         return std::nullopt;
     }
     const auto auth = std::format("Authorization: MediaBrowser Token=\"{}\"", cfg.api_key);
-    return net::http_get(cfg.server_url + path, auth);
+    return net::http_get(jellyfin_base_url(cfg.server_url) + path, auth);
 }
 
 std::optional<std::vector<JellyfinTrack>> fetch_tracks(const JellyfinConfig& cfg, const std::string& target_id, bool use_favs) {
-    if (!use_favs && target_id.empty()) {
-        log::warn("[jellyfin] playlist_id required when use_favorites=false");
+    const auto user_id = jellyfin_item_id(cfg.user_id);
+    const auto playlist_id = jellyfin_item_id(target_id);
+    if (user_id.empty() || (!use_favs && playlist_id.empty())) {
+        log::warn("[jellyfin] expected a valid user ID and playlist ID or Jellyfin playlist link");
         return std::nullopt;
     }
-    std::string path;
-    if (use_favs) {
-        path = std::format("/Users/{}/Items?Filters=IsFavorite&IncludeItemTypes=Audio&Recursive=true", cfg.user_id);
-    } else {
-        path = std::format("/Users/{}/Items?ParentId={}&Filters=IsNotFolder", cfg.user_id, target_id);
-    }
+    const std::string path = use_favs
+        ? std::format("/Users/{}/Items?Filters=IsFavorite&IncludeItemTypes=Audio&Recursive=true", user_id)
+        : std::format("/Playlists/{}/Items?UserId={}", playlist_id, user_id);
     auto body = http_get(cfg, path);
     if (!body) return std::nullopt;
 
@@ -199,10 +199,10 @@ std::unique_ptr<JellyfinSource::Pipe> JellyfinSource::spawn_pipe_locked(std::siz
     const std::wstring ff = ffmpeg_path_.empty() ? std::wstring{L"ffmpeg"}
                                                  : ffmpeg_path_.wstring();
     const std::string stream_url = std::format("{}/Audio/{}/stream?static=true",
-                                                cfg_.server_url, queue_[for_idx].id);
+                                                jellyfin_base_url(cfg_.server_url), queue_[for_idx].id);
 
     std::wstring cmd = quote(ff) +
-        L" -loglevel error -headers " + quote(auth_header) +
+        L" -loglevel error -rw_timeout 15000000 -headers " + quote(auth_header) +
         L" -i " + quote(widen(stream_url)) + L" -f s16le ";
     if (volume_norm_.load(std::memory_order_acquire))
         cmd += L"-af loudnorm=I=-14:TP=-2:LRA=11 ";
@@ -322,6 +322,16 @@ void JellyfinSource::next() {
     std::scoped_lock lk{mu_};
     advance_locked(+1);
 }
+bool JellyfinSource::restart_current() {
+    std::scoped_lock lk{mu_};
+    if (queue_.empty()) return false;
+    discard_prefetch_locked();
+    start_pipe_locked();
+    if (!pipe_) return false;
+    state_.store(PlaybackState::playing, std::memory_order_release);
+    return true;
+}
+
 void JellyfinSource::previous() {
     std::scoped_lock lk{mu_};
     advance_locked(-1);
@@ -343,7 +353,7 @@ bool JellyfinSource::cast(std::string playlist_id, bool use_favorites) {
         std::scoped_lock fetch_lk{fetch_serializer()};
         tracks = fetch_tracks(snap, playlist_id, use_favorites);
     }
-    if (!tracks) return false;
+    if (!tracks || tracks->empty()) return false;
 
     std::scoped_lock lk{mu_};
     target_playlist_ = use_favorites ? "FAVORITES" : playlist_id;

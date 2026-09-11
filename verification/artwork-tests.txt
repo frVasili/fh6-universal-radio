@@ -1,0 +1,6 @@
+196x104: 0.49 ms, 20384 bytes
+196x196: 0.90 ms, 38416 bytes
+392x208: 1.88 ms, 81536 bytes
+392x392: 3.60 ms, 153664 bytes
+5x7: 0.00 ms, 64 bytes
+Independent DDS decode: PASS (cover colors and transparent padding)

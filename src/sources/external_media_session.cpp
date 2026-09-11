@@ -224,6 +224,15 @@ std::optional<ArtworkImage> external_audio_media_session_thumbnail(std::string_v
 #endif
 }
 
+bool external_audio_media_session_restart(std::string_view selected_id) {
+#if FH6_EXTERNAL_AUDIO_HAS_CPPWINRT
+    return with_session(selected_id, [](auto& s) { return s.TryChangePlaybackPositionAsync(0).get(); });
+#else
+    (void)selected_id;
+    return false;
+#endif
+}
+
 bool external_audio_media_session_next(std::string_view selected_id) {
 #if FH6_EXTERNAL_AUDIO_HAS_CPPWINRT
     return with_session(selected_id, [](auto& s) { return s.TrySkipNextAsync().get(); });

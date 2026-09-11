@@ -1,3 +1,4 @@
+#include "fh6/net/http_get.hpp"
 #include "fh6/sources/spotify_source.hpp"
 #include "fh6/sources/external_media_session.hpp"
 #include "fh6/log.hpp"
@@ -381,7 +382,21 @@ void SpotifySource::next() { transport_skip(true); }
 void SpotifySource::previous() { transport_skip(false); }
 
 bool SpotifySource::restart_current() {
-    previous();
+    // A previous command can change the song, particularly near t=0.
+    // Use an actual seek and leave playback untouched when unavailable.
+    bool sent = external_audio_media_session_restart("Spotify.exe");
+    if (!sent && GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version")) {
+        auto result = net::http_get("http://127.0.0.1:8421/spotify/restart", "X-FH6-Media: 1", 2000);
+        sent = result && result->find("true") != std::string::npos;
+    }
+    if (!sent) return false;
+    std::scoped_lock lk{mu_};
+    if (pipe_) {
+        pipe_->bytes_consumed = 0;
+        pipe_->explicit_position_bytes = 0;
+        pipe_->has_explicit_position = true;
+    }
+    info_.position_ms = 0;
     return true;
 }
 

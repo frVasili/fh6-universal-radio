@@ -101,6 +101,7 @@ void YouTubeMusicSource::set_config(YouTubeMusicConfig cfg) {
             cfg.yt_dlp_path = cfg_.yt_dlp_path;
         }
 
+        if (cfg.js_runtime_path.empty()) cfg.js_runtime_path = cfg_.js_runtime_path;
         cfg_ = std::move(cfg);
         
         const auto* new_st = active_station_locked();
@@ -259,11 +260,13 @@ void YouTubeMusicSource::resolve_queue_locked() {
 
     // Playlist URL: enumerate IDs via --flat-playlist.
     const auto yt  = cfg_.yt_dlp_path.empty() ? L"yt-dlp" : cfg_.yt_dlp_path.wstring();
-    std::wstring cmd = quote(yt) + L" --ignore-config --no-warnings --flat-playlist --skip-download "
+    std::wstring cmd = quote(yt) + L" --ignore-config --socket-timeout 15 --retries 3 --fragment-retries 3 --flat-playlist --skip-download "
                                    L"--encoding UTF-8 "
                                    L"--print \"%(id)s\t%(title)s\" ";
     if (!cfg_.cookies_path.empty())
         cmd += L"--cookies " + quote(cfg_.cookies_path.wstring()) + L" ";
+    if (!cfg_.js_runtime_path.empty())
+        cmd += L"--js-runtimes " + quote(L"quickjs:" + cfg_.js_runtime_path.wstring()) + L" ";
     cmd += L"-- " + quote(widen(effective_url));
 
     // Prefer the worker (no fork of the game process); fall back to a direct
@@ -271,7 +274,7 @@ void YouTubeMusicSource::resolve_queue_locked() {
     std::string raw;
     if (worker_ && worker_->alive()) raw = worker_->run_capture(cmd);
 
-    if (raw.empty()) {
+    if (raw.empty() && !(worker_ && worker_->alive())) {
         HANDLE job = create_kill_on_close_job();
         if (!job) {
             log::warn("[yt] resolve_queue: CreateJobObject failed ({})", GetLastError());
@@ -345,11 +348,13 @@ YouTubeMusicSource::spawn_pipe_locked(std::string_view url, std::size_t for_idx)
     const auto yt = cfg_.yt_dlp_path.empty() ? L"yt-dlp" : cfg_.yt_dlp_path.wstring();
     const auto ff = ffmpeg_path_.empty() ? L"ffmpeg" : ffmpeg_path_.wstring();
 
-    std::wstring yt_cmd = quote(yt) + L" --ignore-config --no-warnings --no-progress "
+    std::wstring yt_cmd = quote(yt) + L" --ignore-config --socket-timeout 15 --retries 3 --fragment-retries 3 --no-progress "
                                       L"--no-write-thumbnail "
                                       L"--format bestaudio/best --no-playlist -o - ";
     if (!cfg_.cookies_path.empty())
         yt_cmd += L"--cookies " + quote(cfg_.cookies_path.wstring()) + L" ";
+    if (!cfg_.js_runtime_path.empty())
+        yt_cmd += L"--js-runtimes " + quote(L"quickjs:" + cfg_.js_runtime_path.wstring()) + L" ";
     yt_cmd += L"-- " + quote(widen(play_url));
 
     std::wstring ff_cmd = quote(ff) + L" -loglevel error -i pipe:0 -f s16le ";
@@ -357,7 +362,7 @@ YouTubeMusicSource::spawn_pipe_locked(std::string_view url, std::size_t for_idx)
         ff_cmd += L"-af loudnorm=I=-14:TP=-2:LRA=11 ";
     ff_cmd += L"-acodec pcm_s16le -ar 48000 -ac 2 pipe:1";
 
-    std::wstring tl_cmd = quote(yt) + L" --ignore-config --skip-download --no-warnings --no-playlist "
+    std::wstring tl_cmd = quote(yt) + L" --ignore-config --skip-download --socket-timeout 15 --retries 3 --no-playlist "
                                       L"--no-write-thumbnail "
                                       L"--encoding UTF-8 "
                                       L"--print \"%(title)s\" "
@@ -366,6 +371,8 @@ YouTubeMusicSource::spawn_pipe_locked(std::string_view url, std::size_t for_idx)
                                       L"--print \"%(thumbnail)s\" ";
     if (!cfg_.cookies_path.empty())
         tl_cmd += L"--cookies " + quote(cfg_.cookies_path.wstring()) + L" ";
+    if (!cfg_.js_runtime_path.empty())
+        tl_cmd += L"--js-runtimes " + quote(L"quickjs:" + cfg_.js_runtime_path.wstring()) + L" ";
     tl_cmd += L"-- " + quote(widen(play_url));
 
     // Worker path: delegate every CreateProcess to the worker. Falls through to

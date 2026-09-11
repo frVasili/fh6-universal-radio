@@ -1,0 +1,6 @@
+decoded 589824 PCM bytes, nonzero=1
+decoded 589824 PCM bytes, nonzero=1
+YouTube playback + restart: PASS
+decoded 589824 PCM bytes, nonzero=1
+decoded 583516 PCM bytes, nonzero=1
+Jellyfin saved-link playback + same-track restart: PASS

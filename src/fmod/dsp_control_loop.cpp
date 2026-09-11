@@ -1,3 +1,4 @@
+#include "fh6/playback_policy.hpp"
 #include <windows.h>
 #include <xinput.h>
 #include "fh6/fmod/dsp_control_loop.hpp"
@@ -308,7 +309,16 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
         const auto& mode    = opts->race_start_playback;
         const char* outcome = "keeping current position";
         bool fired          = false;
-        if (mode == "next") {
+        if (mode == "smart") {
+            const auto track = active->current_track();
+            if (restart_recent_track(track.position_ms)) {
+                fired = active->restart_current();
+                outcome = fired ? "restarted recent track" : "restart unavailable; kept recent track";
+            } else {
+                fired = active->skip_next();
+                outcome = fired ? "advanced to next track" : "could not advance queue";
+            }
+        } else if (mode == "next") {
             fired   = active->skip_next();
             outcome = fired ? "advanced to next track" : "could not advance queue";
         } else if (mode == "restart") {

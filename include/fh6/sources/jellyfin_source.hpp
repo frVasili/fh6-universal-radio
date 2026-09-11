@@ -48,6 +48,7 @@ public:
     void stop() override;
     void next() override;
     void previous() override;
+    bool restart_current() override;
     void pump(RingBuffer& ring) override;
 
     // Settings drawer hot-update; re-fetches when auth/url/playlist fields

@@ -37,6 +37,18 @@ std::mutex g_TextureMutex;
 std::vector<TrackedTexture> g_UnverifiedResources;
 std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> g_StreamerModeResources;
 
+// Each submitted upload owns its resources until the queue fence completes.
+// Do not wait for GPU completion inside ExecuteCommandLists (a render thread).
+struct PendingArtworkUpload {
+    Microsoft::WRL::ComPtr<ID3D12Resource> upload;
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commands;
+    Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> targets;
+};
+std::mutex g_UploadMutex;
+std::vector<PendingArtworkUpload> g_PendingUploads;
+
 // hashes the packed pixel blocks, ignoring uninitialized GPU padding bytes in the buffer
 uint64_t CalculateFNV1aPitched(const uint8_t* data, UINT blocksX, UINT blocksY, UINT alignedRowPitch) {
     uint64_t hash = 0xcbf29ce484222325ull;
@@ -168,7 +180,7 @@ __declspec(noinline) bool SafeExecuteFingerprint(
 }
 
 __declspec(noinline) bool SafeExecuteInjection(
-    ID3D12Device* pDevice,
+    ID3D12Fence* pFence,
     ID3D12CommandQueue* pQueue,
     ID3D12GraphicsCommandList* pCmdList,
     const D3D12_TEXTURE_COPY_LOCATION* pSrcLoc,
@@ -218,29 +230,10 @@ __declspec(noinline) bool SafeExecuteInjection(
             (*pModifications)++;
         }
 
-        pCmdList->Close();
-        
+        if (FAILED(pCmdList->Close())) return false;
         ID3D12CommandList* ppMyCommandLists[] = { pCmdList };
         OriginalExecuteCommandLists(pQueue, 1, ppMyCommandLists);
-        
-        ID3D12Fence* pFence = nullptr;
-        if (SUCCEEDED(pDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void**)&pFence))) {
-            HANDLE event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-            if (!event) {
-                pFence->Release();
-                return false;
-            }
-            HRESULT signalHr = pQueue->Signal(pFence, 1);
-            HRESULT eventHr = SUCCEEDED(signalHr) ? pFence->SetEventOnCompletion(1, event) : signalHr;
-            DWORD waitResult = SUCCEEDED(eventHr) ? WaitForSingleObject(event, 5000) : WAIT_FAILED;
-            CloseHandle(event);
-            if (FAILED(signalHr) || FAILED(eventHr) || waitResult != WAIT_OBJECT_0) {
-                pFence->Release();
-                return false;
-            }
-            pFence->Release();
-        }
-        return true;
+        return SUCCEEDED(pQueue->Signal(pFence, 1));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
@@ -319,6 +312,17 @@ void __stdcall HookedExecuteCommandLists(ID3D12CommandQueue* pQueue, UINT NumCom
         return;
     }
 
+    // Multiple render queues may call this hook concurrently. Never block one
+    // on artwork work submitted by another; normal game commands still run.
+    std::unique_lock upload_lock(g_UploadMutex, std::try_to_lock);
+    if (!upload_lock.owns_lock()) {
+        OriginalExecuteCommandLists(pQueue, NumCommandLists, ppCommandLists);
+        return;
+    }
+    std::erase_if(g_PendingUploads, [](const auto& item) {
+        return item.fence->GetCompletedValue() >= 1;
+    });
+
     ID3D12Device* pDevice = nullptr;
     if (SUCCEEDED(pQueue->GetDevice(__uuidof(ID3D12Device), (void**)&pDevice))) {
         
@@ -379,15 +383,17 @@ void __stdcall HookedExecuteCommandLists(ID3D12CommandQueue* pQueue, UINT NumCom
         // INJECTION
         // ==========================================================================
         std::vector<ID3D12Resource*> streamer_copy;
+        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> held_targets;
         {
             std::lock_guard<std::mutex> lock(g_TextureMutex);
-            streamer_copy.reserve(g_StreamerModeResources.size());
-            for (const auto& res : g_StreamerModeResources) {
+            held_targets = g_StreamerModeResources;
+            streamer_copy.reserve(held_targets.size());
+            for (const auto& res : held_targets) {
                 streamer_copy.push_back(res.Get());
             }
         }
 
-        if (!streamer_copy.empty()) {
+        if (!streamer_copy.empty() && g_PendingUploads.size() < 4) {
             std::vector<uint8_t> new_pixels;
             int w, h;
             
@@ -433,6 +439,11 @@ void __stdcall HookedExecuteCommandLists(ID3D12CommandQueue* pQueue, UINT NumCom
                             memcpy(pMapped + (y * alignedRowPitch), new_pixels.data() + (y * tightRowPitch), tightRowPitch);
                         }
                         pUploadResource->Unmap(0, nullptr);
+                    } else {
+                        pUploadResource->Release();
+                        pDevice->Release();
+                        OriginalExecuteCommandLists(pQueue, NumCommandLists, ppCommandLists);
+                        return;
                     }
 
                     ID3D12CommandAllocator* pAllocator = nullptr;
@@ -461,15 +472,31 @@ void __stdcall HookedExecuteCommandLists(ID3D12CommandQueue* pQueue, UINT NumCom
 
                     int modifications = 0;
 
-                    // pass the vector data into the SEH wrapper
-                    if (!SafeExecuteInjection(pDevice, pQueue, pCmdList, &srcLoc, &modifications, streamer_copy.data(), streamer_copy.size())) {
-                        fh6::log::warn("[dx12] intercepted crash during injection loop - texture was likely destroyed by the engine");
+                    ID3D12Fence* fence = nullptr;
+                    if (FAILED(pDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+                            __uuidof(ID3D12Fence), (void**)&fence))) {
+                        pUploadResource->Release();
+                        pCmdList->Release();
+                        pAllocator->Release();
+                        pDevice->Release();
+                        OriginalExecuteCommandLists(pQueue, NumCommandLists, ppCommandLists);
+                        return;
+                    }
+                    PendingArtworkUpload pending;
+                    pending.upload.Attach(pUploadResource);
+                    pending.commands.Attach(pCmdList);
+                    pending.allocator.Attach(pAllocator);
+                    pending.fence.Attach(fence);
+                    pending.targets = std::move(held_targets);
+                    g_PendingUploads.push_back(std::move(pending));
+                    // Retain even on a signal failure: freeing potentially
+                    // in-flight resources is unsafe. The four-entry cap bounds
+                    // retention if the device stops making progress.
+                    if (!SafeExecuteInjection(fence, pQueue, pCmdList, &srcLoc,
+                            &modifications, streamer_copy.data(), streamer_copy.size())) {
+                        fh6::log::warn("[dx12] artwork submission failed; retaining GPU resources safely");
                     }
 
-                    pUploadResource->Release();
-                    pCmdList->Release();
-                    pAllocator->Release();
-                    
                     fh6::log::info("[dx12] BC7 mass overwrite complete on {} live resources", modifications);
                 }
             }
