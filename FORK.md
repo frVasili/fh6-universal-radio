@@ -1,4 +1,12 @@
-# FH6 Universal Radio — personal fork 1.1.10-p3
+# FH6 Universal Radio — personal fork 1.1.10-p4-safe
+
+## p4-safe scheduling cleanup
+
+- Discovery invalidation and heap-scan retries are elapsed-time based, preventing rapid retries from the 20 ms control loop.
+- Informational logging is buffered; warnings and errors still flush promptly.
+- At gain values at or below 0.85, the DSP uses direct S16 scaling because clipping cannot occur.
+
+The artwork worker/cache rewrite and all D3D12 queue changes are deliberately excluded after the p4 startup failure. Existing artwork, metadata, smart restart, YouTube, Jellyfin, controller, and Steam Input paths are unchanged.
 
 Based on [g0ldyy/fh6-universal-radio](https://github.com/g0ldyy/fh6-universal-radio), GPLv3.
 Original credits and dashboard links are retained. This is a local fork, not an upstream release.

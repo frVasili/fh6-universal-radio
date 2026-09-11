@@ -129,7 +129,7 @@ void run_bridge(HMODULE self) noexcept {
     std::filesystem::create_directories(data_dir, ec);
 
     log::init(data_dir / "bridge.log");
-    log::info("[bridge] FH6 Universal Radio personal fork 1.1.10-p3 starting; data_dir={}", data_dir.string());
+    log::info("[bridge] FH6 Universal Radio personal fork 1.1.10-p4-safe starting; data_dir={}", data_dir.string());
 
     const auto ui_dir = data_dir / "ui";
     if (!verify_ui_credits(ui_dir)) {

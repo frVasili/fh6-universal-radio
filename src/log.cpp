@@ -52,7 +52,9 @@ void emit(Level level, std::string_view message) noexcept {
     if (g_file) {
         std::fprintf(g_file, "%s %-5.*s %.*s\n", ts, (int)lvl.size(), lvl.data(),
                      (int)message.size(), message.data());
-        std::fflush(g_file);
+        // Keep ordinary diagnostics out of synchronous timing-sensitive paths.
+        // Errors still flush promptly; shutdown() flushes accumulated info.
+        if (level == Level::warn || level == Level::error) std::fflush(g_file);
     }
 }
 
