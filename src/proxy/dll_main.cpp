@@ -574,9 +574,6 @@ extern "C" __declspec(dllexport) void InitializeDX12Hook();
 
 namespace {
 DWORD WINAPI bridge_thread(LPVOID self) {
-    // Construct the artwork worker before DX12 hooks can run. Starting a
-    // thread from a first render submission is unsafe during game loading.
-    (void)fh6::TextureInjector::instance();
     InitializeDX12Hook(); 
     fh6::run_bridge(static_cast<HMODULE>(self));
     return 0;
