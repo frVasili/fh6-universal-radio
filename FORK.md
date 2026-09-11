@@ -1,7 +1,11 @@
-# FH6 Universal Radio — personal fork 1.1.10-p4
+# FH6 Universal Radio — personal fork 1.1.10-p5
 
 Based on [g0ldyy/fh6-universal-radio](https://github.com/g0ldyy/fh6-universal-radio), GPLv3.
 Original credits and dashboard links are retained. This is a local fork, not an upstream release.
+
+## p5 startup safety fix
+
+- Constructs the persistent artwork worker on the bridge thread before DX12 hooks are installed. This avoids starting the worker for the first time from a game render submission during the splash-to-world loading transition.
 
 ## p4 playback performance changes
 
