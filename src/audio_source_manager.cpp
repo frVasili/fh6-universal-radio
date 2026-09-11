@@ -58,16 +58,19 @@ bool AudioSourceManager::switch_to(std::string_view name) {
     return true;
 }
 
-bool AudioSourceManager::enqueue_active_transport(TransportCommand command) {
-    return enqueue_transport(nullptr, command);
+bool AudioSourceManager::enqueue_active_transport(TransportCommand command,
+                                                  TransportCompletion completion) {
+    return enqueue_transport(nullptr, command, std::move(completion));
 }
 
-bool AudioSourceManager::enqueue_transport(IAudioSource* expected, TransportCommand command) {
+bool AudioSourceManager::enqueue_transport(IAudioSource* expected, TransportCommand command,
+                                           TransportCompletion completion) {
     std::lock_guard swap_lock{swap_mutex_};
     auto* current = active_.load(std::memory_order_acquire);
     if (!current || (expected && current != expected)) return false;
 
-    TransportRequest request{std::string{current->name()}, active_generation_, command};
+    TransportRequest request{std::string{current->name()}, active_generation_, command,
+                             std::move(completion)};
     {
         std::lock_guard queue_lock{transport_mutex_};
         constexpr std::size_t kMaxQueuedTransport = 8;
@@ -89,22 +92,28 @@ void AudioSourceManager::transport_loop(std::stop_token token) {
             transport_queue_.pop_front();
         }
 
-        // This lock keeps the source alive while its operation runs. The
-        // operation itself is deliberately off the 20 ms control-loop thread.
-        std::lock_guard swap_lock{swap_mutex_};
-        auto it = sources_.find(request.source_name);
-        if (it == sources_.end() || active_.load(std::memory_order_acquire) != it->second.get() ||
-            request.generation != active_generation_)
-            continue; // source switch made this request obsolete
-
-        switch (request.command) {
-            case TransportCommand::play: it->second->play(); break;
-            case TransportCommand::pause: it->second->pause(); break;
-            case TransportCommand::stop: it->second->stop(); break;
-            case TransportCommand::next: it->second->next(); break;
-            case TransportCommand::previous: it->second->previous(); break;
-            case TransportCommand::restart: it->second->restart_current(); break;
+        bool succeeded = false;
+        {
+            // This lock keeps the source alive while its operation runs. The
+            // operation itself is deliberately off the 20 ms control-loop thread.
+            std::lock_guard swap_lock{swap_mutex_};
+            auto it = sources_.find(request.source_name);
+            if (it != sources_.end() &&
+                active_.load(std::memory_order_acquire) == it->second.get() &&
+                request.generation == active_generation_) {
+                switch (request.command) {
+                    case TransportCommand::play: it->second->play(); succeeded = true; break;
+                    case TransportCommand::pause: it->second->pause(); succeeded = true; break;
+                    case TransportCommand::stop: it->second->stop(); succeeded = true; break;
+                    case TransportCommand::next: it->second->next(); succeeded = true; break;
+                    case TransportCommand::previous: it->second->previous(); succeeded = true; break;
+                    case TransportCommand::restart:
+                        succeeded = it->second->restart_current();
+                        break;
+                }
+            }
         }
+        if (request.completion) request.completion(succeeded);
     }
 }
 

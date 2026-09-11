@@ -10,6 +10,12 @@ fh6::TrackInfo track(const char* title) {
 }
 int main() {
     using namespace fh6;
+    assert(spotify_unescape_debug(R"(A \u{4e2d}\u{56fd})") == "A 中国");
+    assert(spotify_unescape_debug(R"(foo \"bar\"\n)") == "foo \"bar\"\n");
+    const auto bounded = spotify_display_text(
+        "0123456789012345678901234567890123456789012345678901234567890123456789"
+        "0123456789012345678901234567890123456789012345678901234567890123456789");
+    assert(bounded.size() == 128 && bounded.ends_with("..."));
     SpotifyMetadataSync sync;
     assert(spotify_log_track_id("command=Load(SpotifyUri(\"spotify:track:A\"), true, 0)") == "A");
     assert(spotify_log_track_id("command=Preload(SpotifyUri(\"spotify:track:B\"))") == "B");

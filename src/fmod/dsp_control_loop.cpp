@@ -313,7 +313,11 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
             const auto track = active->current_track();
             if (restart_recent_track(track.position_ms)) {
                 fired = bridge_.manager().enqueue_transport(active,
-                    AudioSourceManager::TransportCommand::restart);
+                    AudioSourceManager::TransportCommand::restart,
+                    [](bool succeeded) {
+                        if (succeeded) log::info("[ctrl] race restart completed");
+                        else log::warn("[ctrl] race restart failed; track was not rewound");
+                    });
                 outcome = fired ? "queued restart of recent track" : "restart queue busy; kept recent track";
             } else {
                 fired = bridge_.manager().enqueue_transport(active,
@@ -326,7 +330,11 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
             outcome = fired ? "queued next track" : "transport queue busy; kept current track";
         } else if (mode == "restart") {
             fired   = bridge_.manager().enqueue_transport(active,
-                AudioSourceManager::TransportCommand::restart);
+                AudioSourceManager::TransportCommand::restart,
+                [](bool succeeded) {
+                    if (succeeded) log::info("[ctrl] race restart completed");
+                    else log::warn("[ctrl] race restart failed; track was not rewound");
+                });
             outcome = fired ? "queued restart" : "transport queue busy; kept current track";
         } else if (mode == "off") {
             const auto st = active->playback_state();

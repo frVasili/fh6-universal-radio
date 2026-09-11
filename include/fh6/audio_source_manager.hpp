@@ -6,6 +6,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -37,8 +38,10 @@ public:
     // Queue a command for the current source. The source is looked up again
     // by name and generation on the worker, so no asynchronous job owns a
     // potentially dangling IAudioSource pointer.
-    bool enqueue_active_transport(TransportCommand command);
-    bool enqueue_transport(IAudioSource* expected, TransportCommand command);
+    using TransportCompletion = std::function<void(bool)>;
+    bool enqueue_active_transport(TransportCommand command, TransportCompletion completion = {});
+    bool enqueue_transport(IAudioSource* expected, TransportCommand command,
+                           TransportCompletion completion = {});
 
     IAudioSource* active() const noexcept { return active_.load(std::memory_order_acquire); }
     RingBuffer& ring() noexcept { return ring_; }
@@ -54,6 +57,7 @@ private:
         std::string source_name;
         std::uint64_t generation = 0;
         TransportCommand command = TransportCommand::next;
+        TransportCompletion completion;
     };
 
     void transport_loop(std::stop_token token);

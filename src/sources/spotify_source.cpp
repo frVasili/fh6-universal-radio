@@ -41,19 +41,6 @@ void send_media_key(WORD vk) {
     SendInput(2, ip, sizeof(INPUT));
 }
 
-// Undo Rust's `{:?}` string escaping for the common cases that appear in
-// track/album/artist names (\" and \\); other escapes keep their literal char.
-std::string unescape_debug(const std::string& s) {
-    if (s.find('\\') == std::string::npos) return s;
-    std::string out;
-    out.reserve(s.size());
-    for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == '\\' && i + 1 < s.size()) ++i;
-        out.push_back(s[i]);
-    }
-    return out;
-}
-
 } // namespace
 
 struct SpotifySource::Pipe {
@@ -443,6 +430,11 @@ void SpotifySource::pump(RingBuffer& ring) {
             if (!ReadFile(p->err_pipe, buf, to_read, &got, nullptr) || got == 0) break;
 
             p->err_buf.append(buf, got);
+            if (p->err_buf.size() > 65536) {
+                const auto keep_from = p->err_buf.rfind('\n');
+                if (keep_from == std::string::npos) p->err_buf.clear();
+                else p->err_buf.erase(0, keep_from + 1);
+            }
 
             // process all complete lines
             size_t pos;
@@ -541,22 +533,23 @@ void SpotifySource::pump(RingBuffer& ring) {
                         size_t start = line.find_first_of('"');
                         size_t end   = line.find_last_of('"');
                         if (start != std::string::npos && end != std::string::npos && start < end) {
-                            std::string val =
-                                unescape_debug(line.substr(start + 1, end - start - 1));
+                            std::string val = spotify_unescape_debug(
+                                line.substr(start + 1, end - start - 1));
 
                             if (p->meta_context == Pipe::MetaContext::Track &&
                                 p->next_meta_title.empty()) {
-                                p->next_meta_title = val;
+                                p->next_meta_title = spotify_display_text(val);
                             } else if (p->meta_context == Pipe::MetaContext::Album &&
                                     p->next_meta_album.empty()) {
-                                p->next_meta_album = val;
+                                p->next_meta_album = spotify_display_text(val);
                             } else if (p->meta_context == Pipe::MetaContext::Artist) {
                                 // librespot repeats artists across track/album; de-dup whole names
                                 const std::string token = ", " + val + ", ";
                                 if ((", " + p->next_meta_artist + ", ").find(token) ==
                                     std::string::npos) {
                                     if (!p->next_meta_artist.empty()) p->next_meta_artist += ", ";
-                                    p->next_meta_artist += val;
+                                    p->next_meta_artist = spotify_display_text(
+                                        p->next_meta_artist + val);
                                 }
                             }
                         }
@@ -658,11 +651,13 @@ void SpotifySource::pump(RingBuffer& ring) {
                             } catch (...) {}
                         }
 
-                        std::string final_title =
-                            p->next_meta_title.empty() ? parsed_title : p->next_meta_title;
+                        std::string final_title = spotify_display_text(
+                            p->next_meta_title.empty() ? spotify_unescape_debug(parsed_title)
+                                                       : p->next_meta_title);
                         std::string final_artist =
-                            p->next_meta_artist.empty() ? "Spotify Connect" : p->next_meta_artist;
-                        std::string final_album = p->next_meta_album; // can be empty
+                            spotify_display_text(p->next_meta_artist.empty()
+                                                     ? "Spotify Connect" : p->next_meta_artist);
+                        std::string final_album = spotify_display_text(p->next_meta_album); // can be empty
                         std::string final_cover = p->next_meta_cover_url;
 
                         

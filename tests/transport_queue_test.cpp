@@ -1,6 +1,7 @@
 #include "fh6/audio_source_manager.hpp"
 
 #include <cassert>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <thread>
@@ -18,6 +19,10 @@ public:
     void pause() override { ++pauses_; }
     void stop() override { ++stops_; }
     void next() override { ++nexts_; }
+    bool restart_current() override {
+        ++restarts_;
+        return true;
+    }
     fh6::TrackInfo current_track() const override { return {}; }
     fh6::PlaybackState playback_state() const noexcept override {
         return fh6::PlaybackState::playing;
@@ -26,6 +31,7 @@ public:
     fh6::SourceCapabilities capabilities() const noexcept override { return {}; }
 
     int nexts() const { return nexts_; }
+    int restarts() const { return restarts_; }
 
 private:
     std::string id_;
@@ -33,6 +39,7 @@ private:
     std::atomic<int> pauses_{0};
     std::atomic<int> stops_{0};
     std::atomic<int> nexts_{0};
+    std::atomic<int> restarts_{0};
 };
 
 bool wait_for_next(const MockSource& source) {
@@ -57,6 +64,15 @@ int main() {
     assert(manager.enqueue_transport(first_ptr, fh6::AudioSourceManager::TransportCommand::next));
     assert(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(100));
     assert(wait_for_next(*first_ptr));
+
+    std::atomic<bool> restart_completed{false};
+    assert(manager.enqueue_transport(first_ptr,
+        fh6::AudioSourceManager::TransportCommand::restart,
+        [&restart_completed](bool succeeded) { restart_completed.store(succeeded); }));
+    const auto restart_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (first_ptr->restarts() == 0 && std::chrono::steady_clock::now() < restart_deadline)
+        std::this_thread::yield();
+    assert(first_ptr->restarts() == 1 && restart_completed.load());
 
     assert(manager.switch_to("second"));
     assert(!manager.enqueue_transport(first_ptr, fh6::AudioSourceManager::TransportCommand::next));
