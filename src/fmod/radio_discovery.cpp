@@ -1,11 +1,9 @@
 #include "fh6/fmod/radio_discovery.hpp"
-#include "fh6/fmod/discovery_policy.hpp"
 #include "fh6/log.hpp"
 #include "fh6/safe_mem.hpp"
 
 #include <windows.h>
 #include <atomic>
-#include <chrono>
 #include <cstring>
 #include <mutex>
 #include <string_view>
@@ -174,19 +172,17 @@ struct Cache {
     const std::byte* col      = nullptr;
     std::byte* vtable         = nullptr;
     std::vector<std::byte*> candidates;
-    std::chrono::steady_clock::time_point empty_since{};
-    std::chrono::steady_clock::time_point last_heap_scan{};
-    std::chrono::steady_clock::time_point last_empty_log{};
+    int empty_streak = 0; // chain-invalid retries since last hit
 };
 std::mutex g_cache_mu;
 Cache g_cache;
 
 // If the cached candidates never resolve (Forza allocated a placeholder
 // wrapper we latched onto, but the real RadioStreamFmod instances haven't
-// been allocated yet), drop the cache after a duration rather than a number
-// of calls. Callers use different retry intervals, including 20 ms.
-constexpr auto kCacheInvalidationDelay = std::chrono::seconds(30);
-constexpr auto kHeapScanCooldown       = std::chrono::seconds(5);
+// been allocated yet), drop the cache after this many empty retries so the
+// next call rescans the heap. Old logs show real wrappers take ~1.5 min to
+// chain-validate, so the threshold is generous enough to avoid thrash.
+constexpr int kRescanThreshold = 30;
 
 } // namespace
 
@@ -210,8 +206,6 @@ DiscoveryResult discover_radio_instances(const PEImage& img) noexcept {
     DiscoveryResult result;
     if (!img.valid()) return result;
 
-    const auto now = std::chrono::steady_clock::now();
-
     Cache local;
     {
         std::scoped_lock lk{g_cache_mu};
@@ -220,11 +214,6 @@ DiscoveryResult discover_radio_instances(const PEImage& img) noexcept {
 
     // First call only: typedesc + COL + vtable + heap scan.
     if (!local.located) {
-        if (!heap_scan_allowed<std::chrono::steady_clock>(now, local.last_heap_scan,
-                                                          kHeapScanCooldown))
-            return result;
-        local.last_heap_scan = now;
-
         const std::byte* td = find_typedesc(img);
         if (!td) {
             static std::atomic<bool> warned{false};
@@ -232,8 +221,6 @@ DiscoveryResult discover_radio_instances(const PEImage& img) noexcept {
                 log::warn("[discovery] _Ref_count_obj2<RadioStreamFmod> typedesc not "
                           "found in any readable section. Check the media overlay.");
             }
-            std::scoped_lock lk{g_cache_mu};
-            g_cache.last_heap_scan = local.last_heap_scan;
             return result;
         }
         const auto td_rva = static_cast<uint32_t>(td - img.base);
@@ -242,8 +229,6 @@ DiscoveryResult discover_radio_instances(const PEImage& img) noexcept {
         const std::byte* col = find_col(img, td_rva);
         if (!col) {
             log::warn("[discovery] typedesc found but no matching COL -- RTTI layout differs");
-            std::scoped_lock lk{g_cache_mu};
-            g_cache.last_heap_scan = local.last_heap_scan;
             return result;
         }
         log::info("[discovery] COL @ RVA=0x{:X}", static_cast<uint32_t>(col - img.base));
@@ -270,8 +255,6 @@ DiscoveryResult discover_radio_instances(const PEImage& img) noexcept {
         if (found_candidates.empty()) {
             // Game hasn't allocated the wrappers yet; don't cache, retry later.
             log::info("[discovery] no heap candidates yet -- waiting for the radio system");
-            std::scoped_lock lk{g_cache_mu};
-            g_cache.last_heap_scan = local.last_heap_scan;
             return result;
         }
         log::info("[discovery] cached {} heap candidate(s) on vtable @ 0x{:X}",
@@ -304,31 +287,29 @@ DiscoveryResult discover_radio_instances(const PEImage& img) noexcept {
     }
 
     if (result.instances.empty()) {
-        if (local.empty_since == std::chrono::steady_clock::time_point{})
-            local.empty_since = now;
-        const bool invalidate = discovery_cache_expired<std::chrono::steady_clock>(
-            now, local.empty_since, kCacheInvalidationDelay);
+        const bool invalidate = ++local.empty_streak >= kRescanThreshold;
         {
             std::scoped_lock lk{g_cache_mu};
             if (invalidate) {
                 g_cache = Cache{}; // force a full heap rescan next call
             } else {
-                g_cache.empty_since = local.empty_since;
-                g_cache.last_empty_log = local.last_empty_log;
+                g_cache.empty_streak = local.empty_streak;
             }
         }
         if (invalidate) {
-            log::info("[discovery] cached candidates stayed chain-invalid for 30s; "
-                      "dropping cache to rescan the heap");
-        } else if (local.last_empty_log == std::chrono::steady_clock::time_point{} ||
-                   now - local.last_empty_log >= std::chrono::seconds(30)) {
-            log::info("[discovery] {} heap candidates, none chain-valid yet "
-                      "(chain breaks: +0x48={} +0x18={} string-empty={}). "
-                      "Load into the game and cycle through radio stations.",
-                      local.candidates.size(), step_histogram[0], step_histogram[1],
-                      step_histogram[2]);
-            std::scoped_lock lk{g_cache_mu};
-            g_cache.last_empty_log = now;
+            log::info("[discovery] cached candidates stayed chain-invalid for {} retries; "
+                      "dropping cache to rescan the heap",
+                      kRescanThreshold);
+        } else {
+            static std::atomic<int> tick{0};
+            const int n = tick.fetch_add(1, std::memory_order_acq_rel);
+            if (n % 6 == 0) { // ~30s at the 5s retry rate
+                log::info("[discovery] {} heap candidates, none chain-valid yet "
+                          "(chain breaks: +0x48={} +0x18={} string-empty={}). "
+                          "Load into the game and cycle through radio stations.",
+                          local.candidates.size(), step_histogram[0], step_histogram[1],
+                          step_histogram[2]);
+            }
         }
         return result;
     }
@@ -336,11 +317,10 @@ DiscoveryResult discover_radio_instances(const PEImage& img) noexcept {
     // Only log the "found" list on the first hit after a miss streak (initial
     // discovery, or a recovery from a stale-cache rescan). Periodic callers
     // like the staleness watchdog would otherwise spam the log every second.
-    const bool first_hit_after_misses = local.empty_since != std::chrono::steady_clock::time_point{};
+    const bool first_hit_after_misses = local.empty_streak != 0;
     if (first_hit_after_misses) {
         std::scoped_lock lk{g_cache_mu};
-        g_cache.empty_since = {};
-        g_cache.last_empty_log = {};
+        g_cache.empty_streak = 0;
     }
     static std::atomic<bool> ever_logged{false};
     if (first_hit_after_misses || !ever_logged.exchange(true, std::memory_order_acq_rel)) {
