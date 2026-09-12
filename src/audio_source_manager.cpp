@@ -12,6 +12,7 @@ AudioSourceManager::AudioSourceManager(std::size_t ring_bytes)
 
 void AudioSourceManager::register_source(std::unique_ptr<IAudioSource> src) {
     if (!src) return;
+    std::lock_guard operation_lock{source_operation_mutex_};
     std::scoped_lock lk{swap_mutex_};
     auto key = std::string{src->name()};
     log::info("[mgr] registered source '{}' ({})", key, src->display_name());
@@ -19,6 +20,7 @@ void AudioSourceManager::register_source(std::unique_ptr<IAudioSource> src) {
 }
 
 std::unique_ptr<IAudioSource> AudioSourceManager::unregister_source(std::string_view name) {
+    std::lock_guard operation_lock{source_operation_mutex_};
     std::scoped_lock lk{swap_mutex_};
     auto it = sources_.find(std::string{name});
     if (it == sources_.end()) return nullptr;
@@ -37,6 +39,7 @@ std::unique_ptr<IAudioSource> AudioSourceManager::unregister_source(std::string_
 }
 
 bool AudioSourceManager::switch_to(std::string_view name) {
+    std::lock_guard operation_lock{source_operation_mutex_};
     std::scoped_lock lk{swap_mutex_};
     auto it = sources_.find(std::string{name});
     if (it == sources_.end()) {
@@ -59,18 +62,18 @@ bool AudioSourceManager::switch_to(std::string_view name) {
 }
 
 bool AudioSourceManager::enqueue_active_transport(TransportCommand command,
-                                                  TransportCompletion completion) {
-    return enqueue_transport(nullptr, command, std::move(completion));
+                                                  TransportCompletion completion, int restart_seconds) {
+    return enqueue_transport(nullptr, command, std::move(completion), restart_seconds);
 }
 
 bool AudioSourceManager::enqueue_transport(IAudioSource* expected, TransportCommand command,
-                                           TransportCompletion completion) {
+                                           TransportCompletion completion, int restart_seconds) {
     std::lock_guard swap_lock{swap_mutex_};
     auto* current = active_.load(std::memory_order_acquire);
     if (!current || (expected && current != expected)) return false;
 
     TransportRequest request{std::string{current->name()}, active_generation_, command,
-                             std::move(completion)};
+                             std::move(completion), restart_seconds};
     {
         std::lock_guard queue_lock{transport_mutex_};
         constexpr std::size_t kMaxQueuedTransport = 8;
@@ -94,22 +97,26 @@ void AudioSourceManager::transport_loop(std::stop_token token) {
 
         bool succeeded = false;
         {
-            // This lock keeps the source alive while its operation runs. The
-            // operation itself is deliberately off the 20 ms control-loop thread.
-            std::lock_guard swap_lock{swap_mutex_};
-            auto it = sources_.find(request.source_name);
-            if (it != sources_.end() &&
-                active_.load(std::memory_order_acquire) == it->second.get() &&
-                request.generation == active_generation_) {
+            std::lock_guard operation_lock{source_operation_mutex_};
+            IAudioSource* source = nullptr;
+            {
+                std::lock_guard swap_lock{swap_mutex_};
+                auto it = sources_.find(request.source_name);
+                if (it != sources_.end() && active_.load(std::memory_order_acquire) == it->second.get() &&
+                    request.generation == active_generation_) source = it->second.get();
+            }
+            // Source replacement waits on operation_lock; pumping can continue
+            // during external transport I/O without waiting on the registry lock.
+            if (source) {
                 switch (request.command) {
-                    case TransportCommand::play: it->second->play(); succeeded = true; break;
-                    case TransportCommand::pause: it->second->pause(); succeeded = true; break;
-                    case TransportCommand::stop: it->second->stop(); succeeded = true; break;
-                    case TransportCommand::next: it->second->next(); succeeded = true; break;
-                    case TransportCommand::previous: it->second->previous(); succeeded = true; break;
-                    case TransportCommand::restart:
-                        succeeded = it->second->restart_current();
-                        break;
+                    case TransportCommand::play: source->play(); succeeded = true; break;
+                    case TransportCommand::pause: source->pause(); succeeded = true; break;
+                    case TransportCommand::stop: source->stop(); succeeded = true; break;
+                    case TransportCommand::next: succeeded = source->skip_next(); break;
+                    case TransportCommand::previous: source->previous(); succeeded = true; break;
+                    case TransportCommand::restart: succeeded = source->restart_current(); break;
+                    case TransportCommand::smart_skip:
+                        succeeded = source->smart_skip(request.restart_seconds); break;
                 }
             }
         }

@@ -215,3 +215,23 @@
     opacity: 0.5;
     pointer-events: none;
 }
+.song-restart-slider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.song-restart-slider input {
+    flex: 1;
+    min-width: 0;
+}
+
+.song-restart-slider output {
+    min-width: 3ch;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.field-disabled {
+    opacity: 0.4;
+}

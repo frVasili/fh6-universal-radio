@@ -22,7 +22,7 @@ namespace fh6 {
 // callback consumes from ring(); pump_once() is the producer side.
 class AudioSourceManager {
 public:
-    enum class TransportCommand { play, pause, stop, next, previous, restart };
+    enum class TransportCommand { play, pause, stop, next, previous, restart, smart_skip };
 
     explicit AudioSourceManager(std::size_t ring_bytes);
 
@@ -39,9 +39,9 @@ public:
     // by name and generation on the worker, so no asynchronous job owns a
     // potentially dangling IAudioSource pointer.
     using TransportCompletion = std::function<void(bool)>;
-    bool enqueue_active_transport(TransportCommand command, TransportCompletion completion = {});
+    bool enqueue_active_transport(TransportCommand command, TransportCompletion completion = {}, int restart_seconds = 30);
     bool enqueue_transport(IAudioSource* expected, TransportCommand command,
-                           TransportCompletion completion = {});
+                           TransportCompletion completion = {}, int restart_seconds = 30);
 
     IAudioSource* active() const noexcept { return active_.load(std::memory_order_acquire); }
     RingBuffer& ring() noexcept { return ring_; }
@@ -58,10 +58,13 @@ private:
         std::uint64_t generation = 0;
         TransportCommand command = TransportCommand::next;
         TransportCompletion completion;
+        int restart_seconds = 30;
     };
 
     void transport_loop(std::stop_token token);
 
+    // Serializes transport with source replacement; PCM pumping never takes it.
+    std::mutex source_operation_mutex_;
     mutable std::mutex swap_mutex_;
     RingBuffer ring_;
     std::unordered_map<std::string, std::unique_ptr<IAudioSource>> sources_;

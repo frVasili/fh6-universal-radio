@@ -1,4 +1,11 @@
-# FH6 Universal Radio — personal fork 1.1.10-p5-safe
+# FH6 Universal Radio — personal fork 1.1.10-p6-smart
+
+## p6-smart
+
+- Smart skip with a saved 1–59 second Song restart slider (default 30).
+- Linux Spotify decisions use the desktop player’s current position and target Spotify directly. The helper remains managed by the user’s Steam launch wrapper.
+- Transport operations no longer hold the PCM pump’s registry mutex during external I/O; source replacement remains serialized. Source-internal locks can still delay pumping for other providers.
+- In-game race transitions still require a user retest.
 
 ## p5-safe scheduling cleanup
 

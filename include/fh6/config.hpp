@@ -23,6 +23,7 @@ struct HotkeysConfig {
 
 struct PlaybackConfig {
     std::string race_start_playback = "smart"; // "smart" | "next" | "restart" | "ignore" | "off"
+    int song_restart_seconds = 30; // Smart skip threshold, [1, 59] seconds
     bool volume_normalization       = false;
     bool equalizer_enabled          = false;
     std::array<float, 5> equalizer_bands{}; // 60 / 250 / 1000 / 4000 / 12000 Hz, [-6, +6] dB

@@ -5,8 +5,11 @@
 #include <cctype>
 
 namespace fh6 {
-constexpr bool restart_recent_track(std::uint64_t position_ms) noexcept {
-    return position_ms <= 30000;
+constexpr int song_restart_seconds(int seconds) noexcept {
+    return seconds < 1 ? 1 : seconds > 59 ? 59 : seconds;
+}
+constexpr bool restart_recent_track(std::uint64_t position_ms, int seconds = 30) noexcept {
+    return position_ms <= static_cast<std::uint64_t>(song_restart_seconds(seconds)) * 1000;
 }
 
 // Accept raw UUIDs and Jellyfin web links/fragments. Never send query strings

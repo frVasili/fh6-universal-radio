@@ -6,6 +6,12 @@ int main() {
     static_assert(restart_recent_track(29999));
     static_assert(restart_recent_track(30000));
     static_assert(!restart_recent_track(30001));
+    static_assert(restart_recent_track(1000, 1));
+    static_assert(!restart_recent_track(1001, 1));
+    static_assert(restart_recent_track(59000, 59));
+    static_assert(!restart_recent_track(59001, 59));
+    static_assert(song_restart_seconds(0) == 1);
+    static_assert(song_restart_seconds(99) == 59);
     const std::string id = "0123456789abcdef0123456789abcdef";
     assert(jellyfin_item_id(id) == id);
     assert(jellyfin_item_id("  " + id + "\n") == id);

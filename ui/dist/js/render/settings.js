@@ -229,6 +229,21 @@ const fieldRenderers = {
         ]);
     },
 
+    "seconds-range": ({ id, label, cur, dataset }) => {
+        const value = Math.max(1, Math.min(59, Number(cur ?? 30)));
+        const out = el("output", { for: id }, `${value}s`);
+        const range = el("input", {
+            id, type: "range", min: "1", max: "59", step: "1",
+            value: String(value), dataset, "aria-describedby": `${id}-hint`,
+        });
+        range.addEventListener("input", () => { out.textContent = `${range.value}s`; });
+        return el("div", { class: "field song-restart" }, [
+            el("label", { for: id }, label),
+            el("div", { class: "song-restart-slider" }, [range, out]),
+            el("span", { id: `${id}-hint`, class: "field-hint" }, t("schema.playback.song_restart_hint")),
+        ]);
+    },
+
     bands: ({ label, cur, section, key }) => {
         const values = Array.isArray(cur) ? cur : [0, 0, 0, 0, 0];
         const rows = EQ_BAND_LABELS.map((bandLabel, i) => {
@@ -359,6 +374,16 @@ export function renderSettings(form, cfg) {
                 };
                 enabledCheckbox.addEventListener("change", toggleFields);
                 toggleFields();
+            }
+            if (section === "playback") {
+                const mode = fieldset.querySelector('[data-key="race_start_playback"]');
+                const range = fieldset.querySelector('[data-key="song_restart_seconds"]');
+                const sync = () => {
+                    range.disabled = mode.value !== "smart";
+                    range.closest(".field").classList.toggle("field-disabled", range.disabled);
+                };
+                mode.addEventListener("change", sync);
+                sync();
             }
             return fieldset;
         }),

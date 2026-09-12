@@ -4,6 +4,7 @@
 #include "fh6/deps.hpp"
 #include "fh6/fmod/dsp_bridge.hpp"
 #include "fh6/log.hpp"
+#include "fh6/playback_policy.hpp"
 #include "fh6/sources/local_file_source.hpp"
 #include "fh6/sources/youtube_music_source.hpp"
 #include "fh6/sources/jellyfin_source.hpp"
@@ -271,6 +272,7 @@ json config_to_json(const Config& c) {
         {"playback",
          json{
              {"race_start_playback", c.playback.race_start_playback},
+             {"song_restart_seconds", c.playback.song_restart_seconds},
              {"volume_normalization", c.playback.volume_normalization},
              {"equalizer_enabled", c.playback.equalizer_enabled},
              {"equalizer_bands", c.playback.equalizer_bands},
@@ -424,6 +426,8 @@ void apply_patch(Config& c, const json& j) {
         auto rs = pull<std::string>(*it, "race_start_playback", c.playback.race_start_playback);
         if (rs == "smart" || rs == "next" || rs == "restart" || rs == "ignore" || rs == "off")
             c.playback.race_start_playback = std::move(rs);
+        c.playback.song_restart_seconds = song_restart_seconds(
+            pull<int>(*it, "song_restart_seconds", c.playback.song_restart_seconds));
         c.playback.volume_normalization =
             pull(*it, "volume_normalization", c.playback.volume_normalization);
         c.playback.force_stereo_audio =

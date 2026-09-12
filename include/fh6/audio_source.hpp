@@ -66,6 +66,11 @@ public:
     // playback actually rewound to t=0. Default is "unsupported".
     virtual bool restart_current() { return false; }
 
+    virtual bool smart_skip(int restart_seconds) {
+        return current_track().position_ms <= static_cast<uint64_t>(restart_seconds) * 1000
+            ? restart_current() : skip_next();
+    }
+
     // Pull PCM into the ring. Sources that push from their own thread no-op.
     virtual void pump(RingBuffer&) {}
 

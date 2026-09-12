@@ -1,5 +1,6 @@
 #include "fh6/config.hpp"
 #include "fh6/log.hpp"
+#include "fh6/playback_policy.hpp"
 
 #include <toml.hpp>
 
@@ -223,6 +224,8 @@ Config load_config(const std::filesystem::path& path) {
         if (rs == "smart" || rs == "next" || rs == "restart" || rs == "ignore" || rs == "off")
             cfg.playback.race_start_playback = std::move(rs);
     }
+    cfg.playback.song_restart_seconds = song_restart_seconds(
+        pick<int>(pb, "song_restart_seconds", cfg.playback.song_restart_seconds));
     cfg.playback.volume_normalization =
         pick<bool>(pb, "volume_normalization", cfg.playback.volume_normalization);
     cfg.playback.equalizer_enabled =
@@ -456,6 +459,7 @@ void save_config(const std::filesystem::path& path, const Config& cfg) {
 
     e.header("playback");
     e.kv("race_start_playback", cfg.playback.race_start_playback);
+    e.kv("song_restart_seconds", static_cast<int64_t>(cfg.playback.song_restart_seconds));
     e.kv("volume_normalization", cfg.playback.volume_normalization);
     e.kv("equalizer_enabled", cfg.playback.equalizer_enabled);
     e.kv_floats("equalizer_bands", std::span<const float>{cfg.playback.equalizer_bands});

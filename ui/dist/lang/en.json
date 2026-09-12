@@ -303,7 +303,9 @@
 
   "schema.playback": "Playback",
   "schema.playback.race_start": "Race start",
-  "schema.playback.race_start.smart": "Restart within 30 seconds, otherwise next",
+  "schema.playback.race_start.smart": "Smart skip",
+  "schema.playback.song_restart": "Song restart",
+  "schema.playback.song_restart_hint": "Restart at or before this point; skip to the next song after it.",
   "schema.playback.race_start.next": "Next",
   "schema.playback.race_start.restart": "Restart",
   "schema.playback.race_start.ignore": "Ignore",

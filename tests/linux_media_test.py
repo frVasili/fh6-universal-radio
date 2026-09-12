@@ -31,4 +31,33 @@ class RestartTest(unittest.TestCase):
             self.assertFalse(bridge.restart_spotify(Mock()))
         props.SetPosition.assert_not_called()
 
+class SmartSkipTest(unittest.TestCase):
+    def test_restart_threshold_boundaries(self):
+        for seconds in (1, 30, 59):
+            for position in (0, seconds * 1000000, seconds * 1000000 + 1):
+                with self.subTest(seconds=seconds, position=position):
+                    props, player = Mock(), Mock()
+                    props.Get.side_effect = [position, True]
+                    with patch.object(bridge.dbus, 'Interface', side_effect=[props, player]), patch.object(bridge, 'restart_spotify', return_value=True) as restart:
+                        result = bridge.smart_skip_spotify(Mock(), seconds)
+                    self.assertTrue(result['ok'])
+                    if position <= seconds * 1000000:
+                        restart.assert_called_once()
+                        player.Next.assert_not_called()
+                    else:
+                        restart.assert_not_called()
+                        player.Next.assert_called_once_with(timeout=2)
+
+    def test_unavailable_restart_does_not_skip(self):
+        props = Mock()
+        props.Get.return_value = 500000
+        with patch.object(bridge.dbus, 'Interface', return_value=props), patch.object(bridge, 'restart_spotify', return_value=False):
+            self.assertFalse(bridge.smart_skip_spotify(Mock(), 30)['ok'])
+        props.Next.assert_not_called()
+
+    def test_out_of_range_rejected(self):
+        for seconds in (0, 60):
+            with self.assertRaises(ValueError):
+                bridge.smart_skip_spotify(Mock(), seconds)
+
 if __name__ == '__main__': unittest.main()

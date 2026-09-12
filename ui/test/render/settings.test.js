@@ -14,7 +14,7 @@ describe("renderSettings", () => {
       local_files: { enabled: true },
       playback: { equalizer_bands: [1, 2, 3, 4, 5], race_start_playback: "restart" },
     });
-    expect(form().querySelectorAll("fieldset").length).toBe(9);
+    expect(form().querySelectorAll("fieldset").length).toBe(12);
     expect(form().querySelector("#f-general-port").value).toBe("8420");
     expect(form().querySelector("#f-local_files-enabled").checked).toBe(true);
 
@@ -69,5 +69,31 @@ describe("smart race start", () => {
     const select = form().querySelector("#f-playback-race_start_playback");
     expect(select.value).toBe("smart");
     expect(collectSettings(form()).playback.race_start_playback).toBe("smart");
+  });
+});
+
+
+describe("Song restart", () => {
+  it("enables only for Smart skip and retains the chosen seconds across mode changes", () => {
+    renderSettings(form(), { playback: { race_start_playback: "next", song_restart_seconds: 12 } });
+    const mode = form().querySelector("#f-playback-race_start_playback");
+    const slider = form().querySelector("#f-playback-song_restart_seconds");
+    expect(slider.disabled).toBe(true);
+    expect([slider.min, slider.max, slider.step]).toEqual(["1", "59", "1"]);
+    mode.value = "smart";
+    mode.dispatchEvent(new Event("change"));
+    expect(slider.disabled).toBe(false);
+    slider.value = "59";
+    slider.dispatchEvent(new Event("input"));
+    expect(slider.nextElementSibling.textContent).toBe("59s");
+    expect(collectSettings(form()).playback.song_restart_seconds).toBe(59);
+    mode.value = "ignore";
+    mode.dispatchEvent(new Event("change"));
+    expect(slider.disabled).toBe(true);
+    expect(collectSettings(form()).playback.song_restart_seconds).toBe(59);
+  });
+  it("defaults old configurations to 30 seconds", () => {
+    renderSettings(form(), { playback: { race_start_playback: "smart" } });
+    expect(collectSettings(form()).playback.song_restart_seconds).toBe(30);
   });
 });

@@ -1,4 +1,5 @@
 #include "fh6/spotify_metadata_sync.hpp"
+#include "fh6/playback_policy.hpp"
 #include "fh6/net/http_get.hpp"
 #include "fh6/sources/spotify_source.hpp"
 #include "fh6/sources/external_media_session.hpp"
@@ -386,6 +387,19 @@ bool SpotifySource::restart_current() {
         pipe_->has_explicit_position = true;
     }
     info_.position_ms = 0;
+    return true;
+}
+
+bool SpotifySource::smart_skip(int restart_seconds) {
+    if (!GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version"))
+        return IAudioSource::smart_skip(restart_seconds);
+    // The desktop player's position is authoritative, including seeks and
+    // reconnects; PCM byte estimates can lag during race scene transitions.
+    auto result = net::http_get("http://127.0.0.1:8421/spotify/smart?seconds=" +
+        std::to_string(song_restart_seconds(restart_seconds)), "X-FH6-Media: 1", 2000);
+    if (!result || result->find("\"ok\": true") == std::string::npos) return false;
+    log::info("[spotify] smart skip: {}", *result);
+    // Let librespot's actual Load/Seek events update position and metadata.
     return true;
 }
 

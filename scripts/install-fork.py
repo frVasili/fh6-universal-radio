@@ -7,7 +7,6 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import re
 import shutil
 
 
@@ -19,21 +18,6 @@ def game_is_running():
         except OSError:
             pass
     return False
-
-
-def smart_config(text):
-    pattern = r'(?ms)(^\[playback\][^\n]*\n)(.*?)(?=^\[|\Z)'
-    def update(match):
-        body = match[2]
-        key = r'(?m)^race_start_playback\s*=\s*[^\n]*'
-        if re.search(key, body):
-            body = re.sub(key, 'race_start_playback = "smart"', body)
-        else:
-            body = 'race_start_playback = "smart"\n' + body
-        return match[1] + body
-    if re.search(pattern, text):
-        return re.sub(pattern, update, text)
-    return text + '\n[playback]\nrace_start_playback = "smart"\n'
 
 
 def main():
@@ -66,15 +50,15 @@ def main():
     root = Path(__file__).resolve().parents[1]
     dist = root / 'dist'
     files = {p.relative_to(dist): p for p in dist.rglob('*') if p.is_file()}
-    # The installed config is patched narrowly, never replaced with example credentials.
+    # Keep the installed config byte-for-byte; new fields use their runtime defaults.
     files.pop(Path('README.txt'), None)
     config_rel = Path('fh6-radio/config.toml')
     existing_config = game / config_rel
-    config_text = smart_config((existing_config if existing_config.exists() else files[config_rel]).read_text())
+    config_text = (existing_config if existing_config.exists() else files[config_rel]).read_text()
     if not (dist / 'version.dll').exists() or not (dist / 'fh6-radio/bin/qjs.exe').exists():
         raise SystemExit('Build and stage the runtime helpers first')
     if args.dry_run:
-        print(f'Will install {len(files)} files, preserve settings, and enable smart race start')
+        print(f'Will install {len(files)} files, preserve existing settings')
         return
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     backup = game / 'fh6-radio' / 'backups' / stamp
