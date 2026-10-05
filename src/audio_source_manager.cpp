@@ -73,7 +73,9 @@ bool AudioSourceManager::enqueue_transport(IAudioSource* expected, TransportComm
     if (!current || (expected && current != expected)) return false;
 
     TransportRequest request{std::string{current->name()}, active_generation_, command,
-                             std::move(completion), restart_seconds};
+                             std::move(completion), restart_seconds, std::nullopt};
+    if (command == TransportCommand::smart_skip)
+        request.event_position_ms = current->current_track().position_ms;
     {
         std::lock_guard queue_lock{transport_mutex_};
         constexpr std::size_t kMaxQueuedTransport = 8;
@@ -99,11 +101,19 @@ void AudioSourceManager::transport_loop(std::stop_token token) {
         {
             std::lock_guard operation_lock{source_operation_mutex_};
             IAudioSource* source = nullptr;
+            const bool changes_audio = request.command == TransportCommand::next ||
+                request.command == TransportCommand::previous ||
+                request.command == TransportCommand::restart ||
+                request.command == TransportCommand::smart_skip ||
+                request.command == TransportCommand::stop;
             {
                 std::lock_guard swap_lock{swap_mutex_};
                 auto it = sources_.find(request.source_name);
                 if (it != sources_.end() && active_.load(std::memory_order_acquire) == it->second.get() &&
-                    request.generation == active_generation_) source = it->second.get();
+                    request.generation == active_generation_) {
+                    source = it->second.get();
+                    transport_changing_audio_ = changes_audio;
+                }
             }
             // Source replacement waits on operation_lock; pumping can continue
             // during external transport I/O without waiting on the registry lock.
@@ -116,8 +126,20 @@ void AudioSourceManager::transport_loop(std::stop_token token) {
                     case TransportCommand::previous: source->previous(); succeeded = true; break;
                     case TransportCommand::restart: succeeded = source->restart_current(); break;
                     case TransportCommand::smart_skip:
-                        succeeded = source->smart_skip(request.restart_seconds); break;
+                        succeeded = source->smart_skip(request.restart_seconds, request.event_position_ms);
+                        log::info("[mgr] smart skip source={} action={} event_position_ms={} threshold_ms={} succeeded={}",
+                                  request.source_name,
+                                  request.source_name == "spotify" ? "provider-position-check" :
+                                      (restart_recent_track(request.event_position_ms.value_or(0), request.restart_seconds) ? "restart" : "next"),
+                                  request.event_position_ms.value_or(0),
+                                  song_restart_seconds(request.restart_seconds) * 1000, succeeded);
+                        break;
                 }
+                // No producer can refill the ring until the completed action's
+                // old PCM is discarded. Never discard audio on failed restart.
+                std::lock_guard swap_lock{swap_mutex_};
+                if (changes_audio && succeeded) ring_.drain();
+                transport_changing_audio_ = false;
             }
         }
         if (request.completion) request.completion(succeeded);
@@ -142,7 +164,7 @@ void AudioSourceManager::pump_once() {
     // Lock so an unregister can't free the source mid-pump.
     std::scoped_lock lk{swap_mutex_};
     auto* a = active_.load(std::memory_order_acquire);
-    if (a) a->pump(ring_);
+    if (a && !transport_changing_audio_) a->pump(ring_);
 }
 
 void AudioSourceManager::shutdown() noexcept {

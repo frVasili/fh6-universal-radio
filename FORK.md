@@ -1,5 +1,32 @@
 # FH6 Universal Radio — personal fork 1.1.10-p6-smart
 
+## September 21 race-start dispatch correction
+
+- Replaced the blanket 45-second race-action cooldown with 250 ms of stable race-state sampling. A valid quick race start now reaches Smart Skip rather than silently keeping the current position. Hotkey cooldowns no longer block race actions.
+- Retain the previous known activity across unreadable samples so a new start after a temporary read failure is not swallowed. Repeated activity and brief glitches do not cause extra starts; the erroneous finish/restart signal remains unused.
+- Smart action logs explicitly distinguish restart, next, and Spotify's provider position check. The 59-second saved threshold is unchanged.
+- Race-transition, transport queue, and threshold regression tests pass; Windows DLL builds. Live in-game trigger timing still requires a play test.
+
+## Smart skip timestamp and restart correction
+
+- Capture the source's current playback position when the race command is queued, before clearing any PCM. Jellyfin uses consumed PCM (decoded bytes minus queued bytes), so buffered-ahead audio does not count as elapsed playback. Spotify on Proton retains its authoritative desktop-player position query at command execution.
+- At or below the configured threshold, restart the current song; above it, advance. Failed restarts preserve the current song rather than falling back to Next.
+- While transport changes the track/position, the pump returns without refilling old PCM. Clear the old ring only after a successful action, then resume pumping, so stale audio cannot conceal a restart.
+- Queue tests cover delayed execution crossing the threshold, failed restart, and audio buffer cleanup; threshold boundary and race transition tests pass.
+
+## Race finish skip correction
+
+- Removed the `radio_state + 0x80 == -1` restart heuristic. A read-only capture during the September 16 play session showed that field changing from 3 to -1 at race completion while both race activity bytes stayed 1; the old code dispatched a second smart skip.
+- Race actions now use only the existing race activity rising edge, retaining the 45-second start debounce and the configured smart restart threshold. The former independent five-second restart shortcut is removed.
+- Missing race-state reads establish a fresh baseline on recovery, rather than fabricating a race end/start pair.
+- Regression coverage checks start, repeated active samples, the captured finish transition, another race, and missing reads. Windows DLL build passed. Installation and a fresh in-game play test are separate steps.
+
+## Jellyfin album covers
+
+- Uses album or inherited primary artwork when a song has no individual cover, preserving track-specific covers when present.
+- Normalizes server URLs and loads dashboard Jellyfin covers directly, including private servers without image CORS support.
+- Verified with artwork metadata regression tests and a Windows DLL cross-build; in-game display still needs a play test.
+
 ## p6-smart
 
 - Smart skip with a saved 1–59 second Song restart slider (default 30).
@@ -94,3 +121,14 @@ If removing the helper permanently, remove `~/.config/systemd/user/fh6-radio-med
 - New dashboard smart-mode save test passes. The broader upstream suite has pre-existing failures: untouched upstream reports 11 failed / 12 passed tests; this fork reports the same 11 failed / 13 passed tests, with the new test passing. Failures include stale layout expectations and uninitialized translations.
 - In-game GPU behavior and frame pacing have not yet been measured. The new p5-safe changes are unit/build verified but still require an actual Spotify driving comparison to confirm perceived stutter is improved.
 - YouTube login/age/region restrictions still apply. This does not bypass them, and a public-video test cannot guarantee every playlist works.
+
+### September 22: consecutive online race detection (p7)
+
+Live capture reproduced the missed Smart Skip: radio activity bytes +0x68/+0x69
+remained 1 at race finish and at the next online race start. The phase at +0x80
+changed from 3 to -1 at finish, then back to 3 at the next start. The old
+activity-only detector missed that start entirely; Spotify transport was not
+called. Treat the -1 phase as an end/rearm signal, never as a start/restart
+request. Keep stable-state filtering and emit diagnostic samples on state
+changes. Replay of the captured sequence now produces exactly one end and one
+subsequent start. Spotify threshold and transport behavior are unchanged.

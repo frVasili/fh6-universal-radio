@@ -1,0 +1,11 @@
+Read-only Wine ReadProcessMemory observer; no game writes or pause.
+2026-09-16 local time (America/Indiana/Indianapolis)
+00:43:51.706 bridge.log: race started -- queued smart skip
+00:44:42.837 observer: +0x68=1 +0x69=1 +0x80=3
+00:46:27.975 bridge.log: race restarted -- queued smart skip
+00:46:27.991 observer: +0x68=1 +0x69=1 +0x80=-1
+00:47:24.310 observer: +0x68=1 +0x69=1 +0x80=3
+User confirmed a skip at race start and an unwanted skip at race end.
+The -1 transition is not sufficient evidence of a race restart.
+Removed that trigger; actual race activity rising-edge handling retained.
+Tests: tests/race_transition_test.cpp PASS; Windows DLL cross-build PASS.

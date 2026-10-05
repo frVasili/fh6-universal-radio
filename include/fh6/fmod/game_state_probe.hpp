@@ -17,7 +17,9 @@ public:
     struct Snapshot {
         bool on_target_station = false;
         bool race_active       = false;
-        bool race_restart      = false;
+        bool race_valid        = false;
+        bool race_phase_valid  = false;
+        std::int32_t race_phase = -1;
     };
     Snapshot read() const noexcept;
 

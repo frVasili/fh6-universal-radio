@@ -1,0 +1,9 @@
+2026-09-16
+PASS: native transport queue regression test (event timestamp captured at enqueue; 58s/59s threshold restarts despite later 80s source position; >59s advances; failed restart keeps PCM; pump does not refill old audio during seek).
+PASS: playback policy boundary tests.
+PASS: race transition regression test including captured finish state.
+PASS: Windows DLL cross-build.
+PASS: live Jellyfin source under Proton, silent in-memory audio:
+  decoded >3s ahead; consumed 0.5s; event timestamp=500 ms
+  Jellyfin uses consumed PCM timestamp and smart skip restarts the same song at zero.
+Installed DLL backed up and byte-hash verified; config byte-for-byte unchanged.

@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { renderNowPlaying, activeSource } from "../../dist/js/render/nowPlaying.js";
+import { describe, it, expect, vi } from "vitest";
+import { renderNowPlaying, activeSource, extractDominantColor } from "../../dist/js/render/nowPlaying.js";
 
 function makeRefs() {
   document.body.innerHTML = `
@@ -52,6 +52,18 @@ describe("renderNowPlaying", () => {
     expect(refs.play.getAttribute("aria-label")).toBe("Pause");
   });
 
+  it("loads Jellyfin covers directly without requiring CORS", () => {
+    const refs = makeRefs();
+    refs.img.crossOrigin = "anonymous";
+    const url = "http://music.home:8096/Items/abc/Images/Primary?tag=cover";
+    renderNowPlaying(refs, {
+      sources: { active: "jellyfin", available: [{ name: "jellyfin" }] },
+      track: { title: "Song", artwork_url: url },
+    });
+    expect(refs.img.getAttribute("src")).toBe(url);
+    expect(refs.img.hasAttribute("crossorigin")).toBe(false);
+  });
+
   it("accepts a relative artwork_url served by the mod (/api/artwork)", () => {
     const refs = makeRefs();
     renderNowPlaying(refs, {
@@ -80,5 +92,20 @@ describe("renderNowPlaying", () => {
       activeSource({ sources: { active: "a", available: [{ name: "a" }, { name: "b" }] } }).name,
     ).toBe("a");
     expect(activeSource({ sources: { active: "z", available: [] } })).toBe(null);
+  });
+});
+
+
+describe("cover color security", () => {
+  it("keeps cross-origin covers from failing settings saves", () => {
+    const context = {
+      drawImage: vi.fn(),
+      getImageData: vi.fn(() => { throw new DOMException("The operation is insecure.", "SecurityError"); }),
+    };
+    const spy = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
+    try {
+      expect(extractDominantColor(document.createElement("img"))).toBeNull();
+      expect(context.getImageData).toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
   });
 });

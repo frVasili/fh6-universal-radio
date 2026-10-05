@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fh6/ring_buffer.hpp"
+#include "fh6/playback_policy.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -66,8 +67,11 @@ public:
     // playback actually rewound to t=0. Default is "unsupported".
     virtual bool restart_current() { return false; }
 
-    virtual bool smart_skip(int restart_seconds) {
-        return current_track().position_ms <= static_cast<uint64_t>(restart_seconds) * 1000
+    virtual bool smart_skip(int restart_seconds, std::optional<uint64_t> event_position_ms = std::nullopt) {
+        // The queue captures the audible position before any buffer drain.
+        // Do not re-read it after scheduling/decoder buffering has advanced it.
+        const auto position = event_position_ms ? *event_position_ms : current_track().position_ms;
+        return restart_recent_track(position, restart_seconds)
             ? restart_current() : skip_next();
     }
 

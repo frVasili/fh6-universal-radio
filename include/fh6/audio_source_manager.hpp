@@ -59,6 +59,7 @@ private:
         TransportCommand command = TransportCommand::next;
         TransportCompletion completion;
         int restart_seconds = 30;
+        std::optional<uint64_t> event_position_ms;
     };
 
     void transport_loop(std::stop_token token);
@@ -70,6 +71,9 @@ private:
     std::unordered_map<std::string, std::unique_ptr<IAudioSource>> sources_;
     std::atomic<IAudioSource*> active_{nullptr};
     std::uint64_t active_generation_ = 0;
+    // Protected by swap_mutex_. Pump returns immediately during a seek/skip;
+    // it must not refill the old song between transport and buffer cleanup.
+    bool transport_changing_audio_ = false;
 
     std::mutex transport_mutex_;
     std::condition_variable_any transport_cv_;

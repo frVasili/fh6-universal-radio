@@ -31,13 +31,16 @@ export function renderNowPlaying(refs, state) {
 
     let src = "";
     if (hasArt) {
-        const isExternal = track.artwork_url.startsWith("http") && !isLocalUrl(track.artwork_url);
+        const isJellyfin = state?.sources?.active === "jellyfin";
+        const isExternal = !isJellyfin && track.artwork_url.startsWith("http") && !isLocalUrl(track.artwork_url);
         src = isExternal
             ? `https://wsrv.nl/?url=${encodeURIComponent(track.artwork_url)}`
             : track.artwork_url;
 
         if (refs.img.getAttribute("src") !== src) {
-            refs.img.crossOrigin = "anonymous";
+            // Private Jellyfin servers may not allow canvas CORS requests.
+            if (isJellyfin) refs.img.removeAttribute("crossorigin");
+            else refs.img.crossOrigin = "anonymous";
             refs.img.src = src;
             refs.img.onload = () => {
                 if (!prefs.dynamicColor.get()) return;
@@ -107,9 +110,18 @@ export function extractDominantColor(imgEl) {
     canvas.width = SIZE;
     canvas.height = SIZE;
     const ctx = canvas.getContext("2d");
-    ctx.drawImage(imgEl, 0, 0, SIZE, SIZE);
-
-    const data = ctx.getImageData(0, 0, SIZE, SIZE).data;
+    if (!ctx) return null;
+    let data;
+    try {
+        ctx.drawImage(imgEl, 0, 0, SIZE, SIZE);
+        data = ctx.getImageData(0, 0, SIZE, SIZE).data;
+    } catch (error) {
+        // Covers can display without CORS permission to read their pixels.
+        // Dynamic color is optional; a tainted canvas must not turn a
+        // successful settings save into an "insecure operation" error.
+        if (error?.name === "SecurityError") return null;
+        throw error;
+    }
     let r = 0, g = 0, b = 0, count = 0;
 
     for (let i = 0; i < data.length; i += 4) {

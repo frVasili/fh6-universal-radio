@@ -1,4 +1,5 @@
 #pragma once
+#include "fh6/race_transition.hpp"
 
 #include "fh6/config.hpp"
 #include "fh6/fmod/dsp_bridge.hpp"
@@ -48,7 +49,8 @@ private:
     // Per-tick state-machine dispatch:
     // - quickStationSkip from the R10 edge (game_state_.on_target_station).
     // - raceStartPlayback from game_state_.race_active (FH6 radio_state
-    //   +0x68 && +0x69) plus the race_restart helper at +0x80.
+    //   +0x68 && +0x69), with +0x80 == -1 ending the previous race.
+    //   The finish phase rearms detection; it never requests a restart.
     void run_playback_state_machines(time_point now) noexcept;
 
     // Discover the live RadioStreamFmod carrying our sample and point the
@@ -78,8 +80,7 @@ private:
     mutable std::mutex playback_opts_mtx_;
     std::shared_ptr<const PlaybackConfig> playback_opts_;
 
-    bool prev_race_         = false;
-    bool prev_race_restart_ = false;
+    RaceTransitionTracker race_transitions_;
     bool prev_r10_          = false;
     bool prev_skip_hotkey_ = false;
     bool prev_source_hotkey_ = false;
@@ -104,7 +105,6 @@ private:
     time_point last_station_cmd_{};
 
     time_point last_r10_off_{};
-    time_point last_race_event_{};
     time_point last_skip_cmd_{};
     bool old_method_src_fired_ = false;
     bool old_method_pp_fired_  = false;

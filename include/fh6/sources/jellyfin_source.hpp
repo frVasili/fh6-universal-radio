@@ -21,7 +21,7 @@ struct JellyfinTrack {
     std::string title;
     std::string artist;
     std::string album;
-    std::string image_tag; // ImageTags.Primary; empty when the item has no cover
+    std::string artwork_url; // Track, album, or inherited primary image
     std::uint64_t duration_ms = 0;
      std::size_t original_index = 0;
 };

@@ -259,13 +259,10 @@ const RadioInstance* ControlLoop::select_instance(const DiscoveryResult& disc) c
 
 void ControlLoop::run_playback_state_machines(time_point now) noexcept {
     using namespace std::chrono_literals;
-    // Debounce constants. 45 s ignores spurious race-flag flips during
-    // loading screens; the 5 s race-restart window stays separate from the
-    // 45 s race-start floor so a quick restart-then-engage still dispatches.
+    // RaceTransitionTracker debounces flag noise without suppressing quick
+    // race starts. Hotkey cooldowns must not discard race-start actions.
     constexpr auto kQuickSkipWindow     = 1000ms;
     constexpr auto kSkipCommandCooldown = 1500ms;
-    constexpr auto kRaceStartDebounce   = 45s;
-    constexpr auto kRaceRestartDebounce = 5s;
 
     std::shared_ptr<const PlaybackConfig> opts;
     {
@@ -275,7 +272,8 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
     if (!opts) return;
     auto* active = bridge_.manager().active();
     if (!active) {
-        prev_r10_ = prev_race_ = prev_race_restart_ = false;
+        prev_r10_ = false;
+        race_transitions_.reset();
         paused_by_race_off_ = false;
         first_connection_   = true;
         quick_skip_armed_   = false;
@@ -289,9 +287,11 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
     // trip a phantom quickStationSkip on every race start.
     const bool r10 = game.on_target_station;
 
+    const auto race_transition = race_transitions_.observe(game.race_valid && game.race_phase_valid, game.race_active,
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count(),
+        game.race_phase);
+
     if (first_connection_) {
-        prev_race_         = game.race_active;
-        prev_race_restart_ = game.race_restart;
         prev_r10_          = r10;
         first_connection_  = false;
         return;
@@ -300,12 +300,8 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
     auto& ring     = bridge_.manager().ring();
 
     // --- raceStartPlayback (race_active edge, gated by R10 + debounces) ---
-    const bool race_edge_in    = game.race_active && !prev_race_;
-    const bool restart_edge_in = game.race_restart && !prev_race_restart_;
-    const bool race_event      = (race_edge_in || restart_edge_in) && r10;
-    const auto race_debounce   = restart_edge_in ? kRaceRestartDebounce : kRaceStartDebounce;
-    if (race_event && now - last_race_event_ >= race_debounce &&
-        now - last_skip_cmd_ >= kSkipCommandCooldown) {
+    const bool race_event = race_transition == RaceTransition::started && r10;
+    if (race_event) {
         const auto& mode    = opts->race_start_playback;
         const char* outcome = "keeping current position";
         bool fired          = false;
@@ -314,7 +310,7 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
                 AudioSourceManager::TransportCommand::smart_skip,
                 [](bool succeeded) {
                     if (succeeded) log::info("[ctrl] smart skip completed");
-                    else log::warn("[ctrl] smart skip failed; check Spotify and the media helper");
+                    else log::warn("[ctrl] smart race action failed; source could not restart or advance");
                 }, opts->song_restart_seconds);
             outcome = fired ? "queued smart skip" : "transport queue busy; kept current track";
         } else if (mode == "next") {
@@ -341,23 +337,20 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
             }
         }
         if (fired) {
-            ring.drain();
+            // The transport worker clears old PCM after the action completes.
             last_skip_cmd_ = now;
         }
-        last_race_event_ = now;
-        log::info("[ctrl] race {} -- {}", restart_edge_in ? "restarted" : "started", outcome);
+        log::info("[ctrl] race started -- {}", outcome);
     }
 
     // --- raceEndResume (race_active falling edge) ---
-    const bool race_edge_out = !game.race_active && prev_race_;
+    const bool race_edge_out = race_transition == RaceTransition::ended;
     if (race_edge_out && paused_by_race_off_) {
         if (bridge_.manager().enqueue_transport(active, AudioSourceManager::TransportCommand::play)) {
             paused_by_race_off_ = false;
             log::info("[ctrl] race ended -- queued playback resume");
         }
     }
-    prev_race_         = game.race_active;
-    prev_race_restart_ = game.race_restart;
 
     // --- Hotkeys ---
     // dynamically load XInput
@@ -534,7 +527,6 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
     // execute skip track
     if (trigger_skip && (now - last_skip_cmd_ >= kSkipCommandCooldown)) {
         if (bridge_.manager().enqueue_transport(active, AudioSourceManager::TransportCommand::next)) {
-            ring.drain();
             last_skip_cmd_ = now;
             log::info("[ctrl] Hotkey triggered: queued next track");
         }
@@ -571,7 +563,6 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
     // execute previous track
     if (trigger_prev && (now - last_prev_cmd_ >= kSkipCommandCooldown)) {
         if (bridge_.manager().enqueue_transport(active, AudioSourceManager::TransportCommand::previous)) {
-            ring.drain();
             last_prev_cmd_ = now;
             log::info("[ctrl] Hotkey triggered: queued previous track");
         }

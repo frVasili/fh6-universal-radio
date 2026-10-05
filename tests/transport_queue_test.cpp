@@ -23,9 +23,17 @@ public:
     bool restart_current() override {
         ++restarts_;
         while (block_restart.load()) std::this_thread::yield();
-        return true;
+        return restart_ok.load();
     }
-    fh6::TrackInfo current_track() const override { return {}; }
+    void pump(fh6::RingBuffer& ring) override {
+        const unsigned char sample[4] = {1, 2, 3, 4};
+        ring.write(sample, sizeof(sample));
+    }
+    fh6::TrackInfo current_track() const override {
+        fh6::TrackInfo info;
+        info.position_ms = position_ms.load();
+        return info;
+    }
     fh6::PlaybackState playback_state() const noexcept override {
         return fh6::PlaybackState::playing;
     }
@@ -33,6 +41,8 @@ public:
     fh6::SourceCapabilities capabilities() const noexcept override { return {}; }
 
     std::atomic<bool> block_restart{false};
+    std::atomic<bool> restart_ok{true};
+    std::atomic<uint64_t> position_ms{0};
     int nexts() const { return nexts_; }
     int restarts() const { return restarts_; }
 
@@ -103,5 +113,57 @@ int main() {
     auto removed = removal.get();
     assert(pump_ready && enqueue_ready && removal_waits && removed.get() == second_ptr);
     manager.shutdown();
-    std::puts("PASS: transport enqueue is asynchronous and rejects stale source generations");
+    // A race event below the threshold must restart even when execution is
+    // delayed until the decoder/player position has crossed that threshold.
+    fh6::AudioSourceManager smart{4096};
+    auto mock = std::make_unique<MockSource>("jellyfin-test");
+    auto* src = mock.get();
+    smart.register_source(std::move(mock));
+    assert(smart.switch_to("jellyfin-test"));
+    smart.pump_once();
+    assert(smart.ring().readable() == 4);
+    src->block_restart = true;
+    assert(smart.enqueue_active_transport(fh6::AudioSourceManager::TransportCommand::restart));
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!src->restarts() && std::chrono::steady_clock::now() < until) std::this_thread::yield();
+    assert(src->restarts() == 1);
+    smart.pump_once();
+    assert(smart.ring().readable() == 4); // no old-song refill during restart
+    src->position_ms = 58000;
+    std::promise<bool> restarted;
+    assert(smart.enqueue_active_transport(fh6::AudioSourceManager::TransportCommand::smart_skip,
+        [&](bool ok) { restarted.set_value(ok); }, 59));
+    src->position_ms = 80000; // queue delay/buffer advancement must not change decision
+    src->block_restart = false;
+    auto result = restarted.get_future();
+    assert(result.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    assert(result.get());
+    assert(src->restarts() == 2 && src->nexts() == 0);
+    assert(smart.ring().readable() == 0); // stale PCM removed after restart
+    smart.pump_once();
+    assert(smart.ring().readable() == 4); // pumping resumes normally
+
+    src->position_ms = 59001;
+    std::promise<bool> skipped;
+    assert(smart.enqueue_active_transport(fh6::AudioSourceManager::TransportCommand::smart_skip,
+        [&](bool ok) { skipped.set_value(ok); }, 59));
+    result = skipped.get_future();
+    assert(result.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    assert(result.get() && src->nexts() == 1 && src->restarts() == 2);
+    assert(smart.ring().readable() == 0);
+
+    // At the threshold inclusive, restart; unsupported restart leaves the
+    // current song and queued PCM alone rather than silently skipping.
+    src->position_ms = 59000;
+    src->restart_ok = false;
+    smart.pump_once();
+    std::promise<bool> failed;
+    assert(smart.enqueue_active_transport(fh6::AudioSourceManager::TransportCommand::smart_skip,
+        [&](bool ok) { failed.set_value(ok); }, 59));
+    result = failed.get_future();
+    assert(result.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    assert(!result.get() && src->restarts() == 3 && src->nexts() == 1);
+    assert(smart.ring().readable() == 4);
+    smart.shutdown();
+    std::puts("PASS: transport queue, event-time threshold, restart/next, and PCM cleanup");
 }

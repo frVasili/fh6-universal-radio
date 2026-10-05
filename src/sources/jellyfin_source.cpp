@@ -1,5 +1,6 @@
 #include "fh6/playback_policy.hpp"
 #include "fh6/sources/jellyfin_source.hpp"
+#include "fh6/sources/jellyfin_artwork.hpp"
 #include "fh6/log.hpp"
 #include "fh6/net/http_get.hpp"
 #include "fh6/subprocess.hpp"
@@ -97,9 +98,7 @@ std::optional<std::vector<JellyfinTrack>> fetch_tracks(const JellyfinConfig& cfg
                 t.artist = ar->front().get<std::string>();
             }
             t.album = item.value("Album", "");
-            if (auto it = item.find("ImageTags");
-                it != item.end() && it->is_object() && it->contains("Primary"))
-                t.image_tag = it->value("Primary", "");
+            t.artwork_url = jellyfin_artwork_url(item, cfg.server_url);
             if (auto r = item.find("RunTimeTicks"); r != item.end() && r->is_number_unsigned())
                 t.duration_ms = r->get<std::uint64_t>() / 10'000u; // 10000 ticks = 1 ms
             t.original_index = og_idx++;
@@ -454,11 +453,7 @@ TrackInfo JellyfinSource::current_track() const {
     info.artist      = t.artist;
     info.album       = t.album;
     info.duration_ms = t.duration_ms;
-    // Public image endpoint; the tag scopes caching and proves a cover exists.
-    if (!t.image_tag.empty() && !cfg_.server_url.empty()) {
-        info.artwork_url = std::format("{}/Items/{}/Images/Primary?tag={}&fillWidth=480&quality=90",
-                                       cfg_.server_url, t.id, t.image_tag);
-    }
+    info.artwork_url = t.artwork_url;
     if (pipe_) info.position_ms = pipe_->position_ms.load(std::memory_order_acquire);
     return info;
 }

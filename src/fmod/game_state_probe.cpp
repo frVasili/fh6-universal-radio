@@ -32,7 +32,6 @@ constexpr const char* kStationOff = "StationOff";
 // Offsets within *radio_state.
 constexpr std::ptrdiff_t kRaceRunningA  = 0x68;
 constexpr std::ptrdiff_t kRaceRunningB  = 0x69;
-constexpr std::ptrdiff_t kRaceRestartDw = 0x80;
 
 constexpr std::ptrdiff_t kStationChain1Off = 0x40;
 constexpr std::ptrdiff_t kStationChain2Off = 0x50;
@@ -82,10 +81,13 @@ GameStateProbe::Snapshot GameStateProbe::read() const noexcept {
     if (!safe_read(singleton_slot_, radio_state) || !radio_state) return out;
 
     uint8_t a = 0, b = 0;
-    int32_t restart = 0;
-    if (safe_read(radio_state + kRaceRunningA, a) && safe_read(radio_state + kRaceRunningB, b))
+    if (safe_read(radio_state + kRaceRunningA, a) && safe_read(radio_state + kRaceRunningB, b)) {
         out.race_active = a != 0 && b != 0;
-    if (safe_read(radio_state + kRaceRestartDw, restart)) out.race_restart = restart == -1;
+        out.race_valid = true;
+    }
+    // +0x80 becomes -1 at completion while +0x68/+0x69 can stay set.
+    // Record the phase separately: completion must never trigger a skip.
+    out.race_phase_valid = safe_read(radio_state + 0x80, out.race_phase);
 
     // Walk to the station-name std::string. Every link can be re-allocated
     // by FH6 (world load, scene swap) so we deref through each step.
@@ -93,8 +95,9 @@ GameStateProbe::Snapshot GameStateProbe::read() const noexcept {
     const std::byte* chain2 = nullptr;
     if (safe_read(radio_state + kStationChain1Off, chain1) && chain1 &&
         safe_read(chain1 + kStationChain2Off, chain2) && chain2) {
-        if (auto name = safe_read_msvc_string(chain2 + kStationNameOff))
+        if (auto name = safe_read_msvc_string(chain2 + kStationNameOff)) {
             out.on_target_station = (*name == kTargetStation1) || (*name == kTargetStation2);
+        }
     }
     return out;
 }

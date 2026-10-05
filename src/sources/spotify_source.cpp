@@ -390,9 +390,9 @@ bool SpotifySource::restart_current() {
     return true;
 }
 
-bool SpotifySource::smart_skip(int restart_seconds) {
+bool SpotifySource::smart_skip(int restart_seconds, std::optional<uint64_t> event_position_ms) {
     if (!GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version"))
-        return IAudioSource::smart_skip(restart_seconds);
+        return IAudioSource::smart_skip(restart_seconds, event_position_ms);
     // The desktop player's position is authoritative, including seeks and
     // reconnects; PCM byte estimates can lag during race scene transitions.
     auto result = net::http_get("http://127.0.0.1:8421/spotify/smart?seconds=" +
