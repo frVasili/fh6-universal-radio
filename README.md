@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **Personal fork of [g0ldyy/fh6-universal-radio](https://github.com/g0ldyy/fh6-universal-radio)**, tested on Linux (CachyOS, Steam, Proton-CachyOS). Not supported by upstream, and no prebuilt binaries are provided; build from source. **AI-assisted:** OpenAI Codex and Anthropic Claude helped write code and docs. Changes are listed in [FORK.md](FORK.md) and test output is in [verification/](verification/). Licensed GPLv3 like upstream.
+>
+> **Fork highlights:** Smart Skip (restart a song if the race starts early in it, otherwise skip), real Spotify seek under Proton via a local MPRIS helper, Jellyfin fixes (raw IDs/links, playlist items API, album art, restart), reduced render-hook overhead, and online-race start detection. Use at your own risk; the mod reads game memory and may break on any FH6 update.
+
 <h1 align="center" id="title">📻 FH6 Universal Radio</h1>
 
 <p align="center">
