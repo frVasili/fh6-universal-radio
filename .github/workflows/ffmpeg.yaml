@@ -4,15 +4,19 @@ name: ffmpeg
 # under Wine (no System32\tar.exe). So we mirror a bare ffmpeg.exe to the `deps`
 # release; the DependencyManager downloads it straight from there on first run.
 # The win64-gpl build is static, so the lone exe is self-contained.
-# Runs weekly to track BtbN's floating `latest`, or on demand from the Actions tab.
+# Builds weekly or on demand; publishes on main pushes changing this workflow.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/ffmpeg.yaml
   workflow_dispatch:
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   mirror:
@@ -25,13 +29,23 @@ jobs:
           unzip -j ffmpeg.zip '*/bin/ffmpeg.exe' -d .
           test -f ffmpeg.exe
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ffmpeg
           path: ffmpeg.exe
 
+  publish:
+    needs: mirror
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ffmpeg
       - name: Publish to deps release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: deps
           name: Provider dependencies
