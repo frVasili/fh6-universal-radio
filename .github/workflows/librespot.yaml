@@ -2,14 +2,9 @@ name: librespot
 
 # librespot ships no official binary, so we build one and publish it to the
 # `deps` release. The mod's DependencyManager downloads from there on first run.
-# Publishes on main pushes changing this workflow after bumping LIBRESPOT_VERSION.
-# Manual runs build an artifact without release permissions.
+# Run manually from the Actions tab after bumping LIBRESPOT_VERSION.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/librespot.yaml
   workflow_dispatch:
 
 permissions:
@@ -43,7 +38,7 @@ jobs:
 
   publish:
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: write
